@@ -1,17 +1,18 @@
 # dependabot-automerge-skill
 
-An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the seven "Pitfalls" sections are the things that have actually broken in production.
+An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the eight "Pitfalls" sections are the things that have actually broken in production.
 
 ## What it does
 
 When triggered, the skill:
 
-1. Inspects the current repo state (dependabot.yml, workflows, branch protection, open Dependabot PRs, available PAT secrets, `allow_auto_merge` flag).
-2. Creates / updates `.github/workflows/auto-merge.yml` with the correct decision policy. Uses a PAT for the merge step (required for PRs that touch `.github/workflows/`).
+1. Inspects the current repo state (dependabot.yml, workflows, branch protection, open Dependabot PRs **and their author login**, available PAT secrets, `allow_auto_merge` flag).
+2. Creates / updates `.github/workflows/auto-merge.yml` with the correct decision policy. Uses a PAT for the merge step (required for PRs that touch `.github/workflows/`). Matches both `app/dependabot` and `dependabot[bot]` logins.
 3. Adjusts the CI workflow (`build.yml`) so it runs on `pull_request` and does not double-trigger on `push`.
 4. Enables `allow_auto_merge` at the repo level.
 5. Sets branch protection with the **actual** required check name(s) — discovered from GraphQL, not guessed.
-6. Verifies the setup against eight concrete checks before reporting success.
+6. Hardens `dependabot.yml` (weekly schedule, grouped updates, sensible PR limit, labels) so the user doesn't drown in noise.
+7. Verifies the setup against nine concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode.
 
 ## When the skill triggers
 
@@ -26,6 +27,8 @@ It activates on phrases like:
 - "`gh pr merge --auto` returns 422 / auto-merge not allowed"
 - "OAuth App cannot create or update workflow"
 - "I changed auto-merge.yml and nothing happened"
+- "auto-merge workflow never runs / always skipped"
+- "app/dependabot vs dependabot[bot]"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
