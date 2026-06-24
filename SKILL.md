@@ -569,6 +569,49 @@ If the actual check names have `isRequired: false` (or no entry exists under tha
 
 **Why this deserves its own pitfall**: the "DIRTY" state in GitHub's merge status is *meant* to signal "needs human resolution", so the manual-fix reflex is correct in the general case. It is wrong specifically for dependabot PRs because the bot is on a timer that will retry automatically. Forgetting that distinction costs you the PR's signed-commit guarantee.
 
+### Pitfall 11 — Third-party auto-merge action silently succeeds while doing nothing
+
+**Symptom**: An open dependabot PR has `mergeStateStatus: CLEAN` and all required checks pass, but the PR is not merging. `gh pr view <N> --json autoMergeRequest` returns `null`. The `auto-merge` workflow run shows every step with `conclusion: success` (including any "Merge dependabot PR" or "Enable auto-merge" step). Looking at the actions log for that step, you see no error output — it just appears to do nothing.
+
+**Cause**: The popular `ahmadnassri/action-dependabot-auto-merge@v2` action (and any other wrapper that hides `gh pr merge --auto` behind a try/catch with a swallowed error) masks the most common failure: `gh pr merge --auto` returning 422 because the repo's `allow_auto_merge` setting is off (Pitfall 6). Some versions also swallow 422s from token scope failures (Pitfall 5). The action's exit code is 0 in either case, so the workflow run is green, but the PR's `autoMergeRequest` never gets set.
+
+**Why the symptom is misleading**: a wrapper action that reports "success" but didn't actually do the thing it's named after is the worst kind of failure — there is no error to read. The diagnostic only works if you compare the workflow run's success to the PR's actual state. If they disagree (run is success, PR is not auto-merging), the wrapper is hiding something.
+
+**Diagnostic**:
+
+```bash
+# Compare workflow conclusion to PR's actual auto-merge state
+for n in $(gh pr list --state open --json number --jq '.[].number'); do
+  run=$(gh run list --workflow="<your auto-merge workflow>" --limit 50 --json conclusion,headBranch --jq ".[] | select(.headBranch | startswith(\"dependabot/\")) | .conclusion" | head -1)
+  amr=$(gh pr view $n --json autoMergeRequest --jq '.autoMergeRequest // "null"')
+  echo "PR #$n  run=$run  autoMergeRequest=$amr"
+done
+```
+
+If you see `run=success  autoMergeRequest=null` for any PR, the wrapper is hiding a 422. Check `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` — if it's `false`, that's the cause. If it's `true`, the issue is most likely token scope (Pitfall 5).
+
+**Fix**: Replace the wrapper with explicit steps so each step's exit code is the success criterion and any 422 surfaces as a visible failure:
+
+```yaml
+- name: Approve dependabot PR
+  if: steps.check.outputs.should_merge == 'true'
+  run: gh pr review --approve "$PR_URL"
+  env:
+    PR_URL: ${{ github.event.pull_request.html_url }}
+    GH_TOKEN: ${{ secrets.MYTOKEN }}
+
+- name: Enable auto-merge
+  if: steps.check.outputs.should_merge == 'true'
+  run: gh pr merge --auto --rebase "$PR_URL"
+  env:
+    PR_URL: ${{ github.event.pull_request.html_url }}
+    GH_TOKEN: ${{ secrets.MYTOKEN }}
+```
+
+Both steps have a single command; if either returns non-zero (including 422), the step's `conclusion` becomes `failure` and shows up red in the Actions tab. The PR's `autoMergeRequest` either gets set or it does not — you can read it directly.
+
+**Why this deserves its own pitfall**: the wrapper action is the most-clicked result when you search "github action dependabot auto-merge", and it has a fundamental design flaw (swallowed errors with green exit code) that hides the most common failure mode. Anyone inheriting an existing `auto-merge.yml` that uses this action is likely in the "green run, no merge" state right now and does not know it.
+
 ---
 
 ## Verification (mandatory before reporting done)
@@ -774,6 +817,31 @@ latest revision):
   (`<project>/docs/dependabot-optimization-notes.md`). Both writing
   the doc and updating the skill are required deliverables, not
   optional polish.
+
+After optimizing `XenoAmess/jcpp-maven-plugin` (the run that produced
+the latest revision):
+
+- **Pitfall 11 added**: the popular `ahmadnassri/action-dependabot-auto-merge@v2`
+  action silently succeeds while doing nothing. Symptom: open dependabot
+  PR with `mergeStateStatus: CLEAN` and `autoMergeRequest: null`,
+  workflow run is green. Cause: the wrapper swallows 422s from
+  `gh pr merge --auto` (most often `allow_auto_merge=false` per Pitfall 6,
+  sometimes token scope per Pitfall 5). Diagnostic: compare `gh run list`
+  conclusions to `gh pr view --json autoMergeRequest` — disagreement
+  means a wrapper is hiding something. Fix: replace with explicit
+  `gh pr review --approve` + `gh pr merge --auto --rebase` steps so
+  each step's exit code surfaces. This is the most-clicked
+  "github action dependabot auto-merge" search result; anyone inheriting
+  an `auto-merge.yml` that uses it is likely in the green-but-no-merge
+  state right now.
+- **Diagnostic one-liner added** to Pitfall 11 — looping over open PRs
+  to compare run conclusion vs `autoMergeRequest` is the fast triage.
+- **Counts bumped**: ten → eleven pitfalls (verification count unchanged
+  at eleven). New trigger phrases ("auto-merge workflow runs but does
+  nothing / always skipped", "auto-merge merged without running CI")
+  added to description — though these were already in the When-to-use
+  list, they were treated as separate symptoms before; now they have a
+  shared root cause (Pitfall 11).
 
 One commit, ~140 insertions, no rewrite. This is the expected shape of
 an update: targeted edits, counts grepped, README synced, single commit.

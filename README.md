@@ -72,7 +72,7 @@ The skill itself is a single `SKILL.md` file. opencode scans for `**/SKILL.md` i
 
 ## Why a single file?
 
-opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the ten pitfalls, and the eleven-item verification checklist in one place, with no extra navigation.
+opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the eleven pitfalls, and the eleven-item verification checklist in one place, with no extra navigation.
 
 ## License
 
