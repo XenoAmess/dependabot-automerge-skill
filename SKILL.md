@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "auto-merge returns 422", "oauth app cannot create workflow". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -22,6 +22,11 @@ Use this skill when the user says any of:
 - "I want major version updates for github-actions to auto-merge"
 - "branch protection / required status check"
 - "I keep getting dependabot PRs to click through manually"
+- "PR is stuck at `BEHIND`"
+- "`gh pr merge --auto` returns 422 / "Auto merge is not allowed""
+- "auto-merge says 'OAuth App cannot create or update workflow'"
+- "I changed auto-merge.yml and nothing happened"
+- "dependabot is open but not being merged"
 
 Do **not** use this skill for:
 
@@ -43,12 +48,18 @@ Before changing anything, gather context. Do not skip these.
    ```bash
    gh auth status
    gh api repos/<owner>/<repo>/branches/master/protection
+   gh api repos/<owner>/<repo> --jq '.allow_auto_merge'   # see Pitfall 6
    ```
 3. **Check if there are stuck PRs** that motivated the request:
    ```bash
    gh pr list --state open --json number,title,headRefName,mergeStateStatus
    ```
-4. **Read the actual check names** that GitHub is generating, not what you assume. See §4.2.
+4. **Read the actual check names** that GitHub is generating, not what you assume. See Pitfall 3.
+5. **Inventory available PAT secrets**:
+   ```bash
+   gh secret list
+   ```
+   You need at least one PAT with `repo` + `workflow` scope for auto-merge to work on PRs that modify `.github/workflows/*.yml`. `GITHUB_TOKEN` is not sufficient — see Pitfall 5. If none exists, ask the user to create one.
 
 If the repo does not have `gh` auth, stop and ask the user to log in. Do not guess at branch protection.
 
@@ -56,14 +67,16 @@ If the repo does not have `gh` auth, stop and ask the user to log in. Do not gue
 
 ## Strategy
 
-There are four moving parts. All four are required.
+There are six moving parts. All are required.
 
 | # | File / setting | Purpose |
 | --- | --- | --- |
 | 1 | `.github/workflows/auto-merge.yml` | Approve and enable auto-merge on qualifying Dependabot PRs |
 | 2 | `.github/workflows/build.yml` | Run CI on `pull_request` so required checks appear on the PR |
-| 3 | Branch protection on `master` | Mark the CI check as required, so `gh pr merge --auto` actually waits |
-| 4 | `dependabot.yml` (optional) | Only touch if the user wants grouping/ignores/schedule changes |
+| 3 | `allow_auto_merge` repo setting | Precondition for `gh pr merge --auto` — see Pitfall 6 |
+| 4 | A PAT secret (`repo` + `workflow` scope) | Needed because `GITHUB_TOKEN` cannot enable auto-merge on PRs that modify `.github/workflows/*.yml` — see Pitfall 5 |
+| 5 | Branch protection on `master` | Mark the CI check as required, so `gh pr merge --auto` actually waits |
+| 6 | `dependabot.yml` (optional) | Only touch if the user wants grouping/ignores/schedule changes |
 
 ### Decision table for what to merge
 
@@ -87,7 +100,7 @@ Apply the changes in this order. Do not push or run any GitHub API call until ea
 
 ### Step 1 — `auto-merge.yml`
 
-Create `.github/workflows/auto-merge.yml`:
+Create `.github/workflows/auto-merge.yml`. **Use a PAT secret** (`MYTOKEN` below) for the merge and approve steps — `GITHUB_TOKEN` is not sufficient for PRs that modify `.github/workflows/*.yml` (see Pitfall 5). `fetch-metadata` is read-only and can use `GITHUB_TOKEN`.
 
 ```yaml
 name: Dependabot auto-merge
@@ -118,9 +131,9 @@ jobs:
           if [[ "$TYPE" == "version-update:semver-patch" ]] || \
              [[ "$TYPE" == "version-update:semver-minor" ]] || \
              { [[ "$TYPE" == "version-update:semver-major" ]] && [[ "$REF" == dependabot/github_actions/* ]]; }; then
-            echo "should_merge=true" >> $GITHUB_OUTPUT
+            echo "should_merge=true" >> "$GITHUB_OUTPUT"
           else
-            echo "should_merge=false" >> $GITHUB_OUTPUT
+            echo "should_merge=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Approve dependabot PR
@@ -128,17 +141,19 @@ jobs:
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.MYTOKEN }}   # PAT with repo + workflow scope
 
       - name: Enable auto-merge
         if: steps.check.outputs.should_merge == 'true'
         run: gh pr merge --auto --rebase "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.MYTOKEN }}   # PAT with repo + workflow scope
 ```
 
 Adapt the third `||` branch to match the policy table above. For a Maven-only repo, drop the major-merge clause entirely.
+
+**Secret name is case-sensitive** — `${{ secrets.mytoken }}` (lowercase) and `${{ secrets.MYTOKEN }}` (uppercase) are different secrets. Verify with `gh secret list`.
 
 ### Step 2 — `build.yml` (or whatever the CI workflow is named)
 
@@ -159,9 +174,28 @@ on:
   pull_request:    # WRONG: every PR commit triggers both events
 ```
 
-If the build uses a `matrix`, the actual check name will include matrix dimensions (e.g. `build (ubuntu-latest, 11, false)`). You will need this exact string in step 3.
+If the build uses a `matrix`, the actual check name will include matrix dimensions (e.g. `build (ubuntu-latest, 11, false)`). You will need this exact string in Step 4.
 
-### Step 3 — Branch protection
+### Step 3 — `allow_auto_merge` (repo setting)
+
+`gh pr merge --auto` requires the repo-level `allow_auto_merge` flag. This is a separate setting from branch protection and is **off by default** on many repos. Enable it:
+
+```bash
+gh api -X PATCH repos/<owner>/<repo> \
+  -H "Accept: application/vnd.github+json" \
+  -f allow_auto_merge=true
+```
+
+Verify:
+
+```bash
+gh api repos/<owner>/<repo> --jq '.allow_auto_merge'
+# should print: true
+```
+
+If this is off, every `gh pr merge --auto` will silently 422. See Pitfall 6.
+
+### Step 4 — Branch protection
 
 Get the actual check names from a recent PR, then set required checks. Never guess the name.
 
@@ -211,7 +245,7 @@ EOF
 - `enforce_admins: false` — let admins bypass (useful for hot-fixes).
 - `required_pull_request_reviews: null` — auto-merge should not be gated by human review.
 
-### Step 4 — Commit and push
+### Step 5 — Commit and push
 
 ```bash
 git add .github/workflows/auto-merge.yml .github/workflows/build.yml
@@ -220,11 +254,20 @@ git commit -m "ci: dependabot auto-merge with required CI gate"
 
 `git push` may be rejected because the remote master has moved while you were editing. Rebase, then push. The `Bypassed rule violations` message during push is expected when `enforce_admins: false`.
 
+**If `git push` is rejected with "OAuth App to create or update workflow ... without `workflow` scope"**, your gh CLI token lacks the `workflow` scope. The simplest fix is to switch the remote URL from HTTPS to SSH:
+
+```bash
+git remote set-url origin git@github.com:<owner>/<repo>.git
+git push
+```
+
+SSH uses your local SSH key and is not subject to the `workflow` OAuth scope restriction.
+
 ---
 
 ## Pitfalls (read these before declaring success)
 
-These are the four things that have actually broken in production. Re-check each one before finishing.
+These are the seven things that have actually broken in production. Re-check each one before finishing.
 
 ### Pitfall 1 — Major version updates never merge
 
@@ -248,7 +291,7 @@ These are the four things that have actually broken in production. Re-check each
 
 **Cause**: Branch protection has `Java CI / build` (workflow name + job name), but the actual GitHub Actions check name is the job name with matrix dimensions, like `build (ubuntu-latest, 11, false)`. The two do not match.
 
-**Diagnostic**: Run the GraphQL query in Step 3 and look for `isRequired: false` on a check you expected to be required. That is the smoking gun.
+**Diagnostic**: Run the GraphQL query in Step 4 and look for `isRequired: false` on a check you expected to be required. That is the smoking gun.
 
 **Fix**: Use the actual name(s) shown by GraphQL. For matrix jobs you need one entry per matrix axis value — there is no wildcard.
 
@@ -260,18 +303,67 @@ These are the four things that have actually broken in production. Re-check each
 
 **Fix**: Scope `push` to the base branch: `push: { branches: [ master ] }`. PR commits only fire `pull_request`; direct pushes to master only fire `push`. No overlap.
 
+### Pitfall 5 — `GITHUB_TOKEN` cannot enable auto-merge on workflow PRs
+
+**Symptom**: Auto-merge workflow logs `GraphQL: Pull request refusing to allow a GitHub App to create or update workflow '.github/workflows/<file>.yml' without 'workflows' permission (enablePullRequestAutoMerge)`. Exit code 1, the merge step fails. The Approve step usually succeeds first.
+
+**Cause**: GitHub restricts `GITHUB_TOKEN` on `pull_request` events from writing to `.github/workflows/**`. Any PR that bumps an action version (i.e. virtually all `dependabot/github_actions/*` PRs) hits this.
+
+**Fix**: Use a repo PAT with `repo` + `workflow` scope for the `gh pr review` and `gh pr merge` steps. `fetch-metadata` is read-only and can keep using `GITHUB_TOKEN`. Configure via `gh secret set MYTOKEN` (use whatever name you want; remember the case).
+
+**Diagnostic**: If you're not sure which token the action is using, check the secret name. `${{ secrets.mytoken }}` (lowercase) and `${{ secrets.MYTOKEN }}` (uppercase) are different secrets — names are case-sensitive. An undefined secret silently falls back to `GITHUB_TOKEN` and produces this exact error.
+
+### Pitfall 6 — `allow_auto_merge` is off at the repo level
+
+**Symptom**: `gh pr merge --auto` returns 422 / "Auto merge is not allowed for this repository". The auto-merge workflow succeeds (no error in the step), but the PR's `autoMergeRequest` stays null.
+
+**Cause**: The `allow_auto_merge` repo setting is independent of branch protection and is **off by default**. Some repos turn it off explicitly.
+
+**Fix**: Enable it before doing anything else:
+
+```bash
+gh api -X PATCH repos/<owner>/<repo> -f allow_auto_merge=true
+```
+
+**Diagnostic**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` — should print `true`. If it prints `false` or `null`, that's your problem.
+
+### Pitfall 7 — `strict: true` + rapid dependabot rebase race
+
+**Symptom**: After setting everything up correctly, one or more Dependabot PRs sit at `mergeStateStatus: BEHIND` indefinitely. The auto-merge workflow ran and `should_merge` was `true`, but the merge never happens.
+
+**Cause**: When many Dependabot PRs are open at once, they all want to be the "first" to merge. Each one's auto-merge cycle looks like:
+
+1. dependabot rebases PR onto master at SHA X
+2. CI passes, auto-merge waits
+3. Another PR merges first, master moves to X+1
+4. The first PR is now "1 commit behind" and `strict: true` blocks it
+5. dependabot's auto-rebase runs **once an hour**, not instantly
+6. In the meantime, more PRs merge, the gap widens
+
+Eventually one PR wins the race (lowest rebase count + no contention), but the rest can sit for hours.
+
+**Fix options** (pick one, do not combine):
+
+- **Trigger rebase manually for all open Dependabot PRs** in one batch, with the `gh` script in the Quick Reference. Each round collapses the backlog. Repeat until all PRs are CLEAN.
+- **Switch to `strict: false`** — auto-merge handles rebase as part of the merge. Tradeoff: stale PRs merge through, but you lose protection against out-of-date merges.
+- **Sequential processing** — disable auto-merge for the lower-priority PRs, merge the most important one first, then re-enable auto-merge. Slow but predictable.
+
+**Do not** keep refreshing the PR page hoping it will clear. The state is genuinely stuck until something pushes master or dependabot re-rebases.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all six checks pass.
+Do not tell the user "done" until all eight checks pass.
 
-1. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
-2. **Required check is actually required**: GraphQL query in Step 3 returns `isRequired: true` for the CI check(s).
-3. **Patch auto-merges**: trigger a patch bump (e.g. dependabot creates one overnight), confirm it gets approved and merged within a few minutes.
-4. **GitHub Actions major auto-merges**: trigger a github-actions major bump. Confirm same as above.
-5. **Maven major does NOT auto-merge**: trigger a maven major bump. Confirm the PR is approved by the bot but stays open with `auto-merge: false`.
-6. **No double-runs**: in the Actions tab, the latest dependabot PR should have exactly `N` CI runs (where `N` is the size of the matrix), not `2N`.
+1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
+2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
+3. **Required check is actually required**: GraphQL query in Step 4 returns `isRequired: true` for the CI check(s).
+4. **Patch auto-merges**: trigger a patch bump (e.g. dependabot creates one overnight), confirm it gets approved and merged within a few minutes.
+5. **GitHub Actions major auto-merges**: trigger a github-actions major bump. Confirm same as above.
+6. **Maven major does NOT auto-merge**: trigger a maven major bump. Confirm the PR is approved by the bot but stays open with `auto-merge: false`.
+7. **No double-runs**: in the Actions tab, the latest dependabot PR should have exactly `N` CI runs (where `N` is the size of the matrix), not `2N`.
+8. **Auto-merge workflow uses the right token**: open the auto-merge workflow run for a workflow-touching PR (e.g. an `actions/checkout` bump). The Approve and Enable auto-merge steps should NOT show the `workflows` permission error.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -283,6 +375,31 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 - **`@dependabot recreate` resets the PR**: if you find a PR that has been force-pushed mid-flight, give it a minute. The auto-merge workflow re-runs on `pull_request` events.
 - **First run after enabling**: the first time branch protection is set up, GitHub can take 30–60 seconds to register the required checks. Re-querying GraphQL immediately may still show `isRequired: false`. Wait, then re-check.
 - **Admins can push even with branch protection** when `enforce_admins: false`. So you can hot-fix without disabling protection.
+- **`mergeStateStatus` cheat sheet** — the state is more nuanced than "blocked" / "not blocked":
+
+  | State | Meaning | Action |
+  | --- | --- | --- |
+  | `CLEAN` | ready to merge, all checks pass | wait for auto-merge to fire |
+  | `BEHIND` | base branch has new commits the PR doesn't have | see Pitfall 7 |
+  | `BLOCKED` | a required review or check is missing | inspect the PR |
+  | `DIRTY` | has a real merge conflict (not just "behind") | manual resolution required |
+  | `UNSTABLE` | checks are still running or one just failed | wait or look at the failed check |
+  | `UNKNOWN` | GitHub is still computing the state | refresh in a few seconds |
+
+- **Old PRs don't pick up new auto-merge logic automatically**. If you change `auto-merge.yml` (e.g. switch from `target: minor` to native `gh pr merge --auto`), existing open Dependabot PRs will keep using the old workflow. To force them through the new logic, close and reopen:
+
+  ```bash
+  gh pr close <N> --delete-branch=false
+  gh pr reopen <N>
+  ```
+
+  The `pull_request` event (action: `reopened`) re-runs the workflow. This is the only way short of waiting for dependabot to push a new commit.
+
+- **`@dependabot rebase` is a force-push**. When you post `@dependabot rebase` on a PR with auto-merge enabled, dependabot force-pushes its branch, which **resets `autoMergeRequest` to null**. The auto-merge workflow then re-runs and re-enables it. This is fine, but means the rebase → re-enable sequence takes ~30–60 seconds and the merge itself happens on a third workflow run. Don't be surprised by the delay.
+
+- **`gh push` from the CLI to a workflow file needs `workflow` scope**. If your local git remote is HTTPS and your `gh` token doesn't have the `workflow` OAuth scope, you get: "refusing to allow an OAuth App to create or update workflow `.github/workflows/...` without `workflow` scope". Two fixes:
+  1. Switch the remote to SSH: `git remote set-url origin git@github.com:<owner>/<repo>.git`
+  2. Re-authenticate `gh` with the `workflow` scope (note: classic OAuth app tokens cannot add this scope; you need a fine-grained PAT or a different auth method). SSH is simpler.
 
 ---
 
@@ -292,23 +409,44 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 # Auth check
 gh auth status
 
+# allow_auto_merge (Step 3)
+gh api repos/<owner>/<repo> --jq '.allow_auto_merge'
+gh api -X PATCH repos/<owner>/<repo> -f allow_auto_merge=true
+
+# Secret inventory (Pre-flight 5)
+gh secret list
+
 # Current branch protection
 gh api repos/<owner>/<repo>/branches/master/protection
 
 # PR list
 gh pr list --state open --json number,title,headRefName,mergeStateStatus
 
-# PR status
-gh pr view <N> --json mergeStateStatus,statusCheckRollup
+# PR status + auto-merge flag
+gh pr view <N> --json mergeStateStatus,autoMergeRequest,statusCheckRollup
 
 # Real check names + isRequired
-gh api graphql -F query='...'   # see Step 3
+gh api graphql -F query='...'   # see Step 4
 
 # Set branch protection
 gh api -X PUT repos/<owner>/<repo>/branches/master/protection \
   -H "Accept: application/vnd.github+json" --input - <<'EOF'
 { ... }
 EOF
+
+# Re-trigger auto-merge workflow on a stuck PR
+gh pr close <N> --delete-branch=false
+gh pr reopen <N>
+
+# Force dependabot to rebase a PR (resolves BEHIND)
+gh pr comment <N> --body "@dependabot rebase"
+
+# Batch-rebase all open Dependabot PRs
+gh pr list --state open --json number --jq '.[].number' | \
+  xargs -I {} sh -c 'gh pr comment {} --body "@dependabot rebase"'
+
+# Set git remote to SSH (when gh OAuth lacks workflow scope)
+git remote set-url origin git@github.com:<owner>/<repo>.git
 ```
 
 ---
@@ -318,5 +456,9 @@ EOF
 - "I don't want CI to run twice" → Step 2 + Pitfall 4.
 - "Major versions should not auto-merge at all" → drop the third `||` branch in Step 1.
 - "Maven major should also auto-merge" → remove the `dependabot/github_actions/*` prefix gate in Step 1.
-- "I want strict review" → set `required_pull_request_reviews` in Step 3. Note: this will likely conflict with `enforce_admins: false`; pick one.
+- "I want strict review" → set `required_pull_request_reviews` in Step 4. Note: this will likely conflict with `enforce_admins: false`; pick one.
 - "I want a different merge method" → change `--rebase` to `--merge` or `--squash` in `auto-merge.yml`.
+- "I changed the workflow but old PRs aren't auto-merging with the new logic" → close + reopen each open PR. See Snags.
+- "My PRs are stuck at `BEHIND` even though CI passes" → Pitfall 7. Easiest fix: run the batch rebase script in Quick Reference on all open Dependabot PRs.
+- "The auto-merge workflow says 'OAuth App cannot create or update workflow'" → your `gh` token lacks the `workflow` scope. Either switch the git remote to SSH (Quick Reference) or use a fine-grained PAT.
+- "I have a PAT but it's still using `GITHUB_TOKEN`" → check the secret name case (`secrets.mytoken` ≠ `secrets.MYTOKEN`). `gh secret list` shows the actual names.
