@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -33,6 +33,9 @@ Use this skill when the user says any of:
 - "branch protection required check name no longer matches"
 - "CI looks like it's running but isn't gating the PR"
 - "I bumped the JDK matrix and now auto-merge is broken"
+- "dependabot PR went DIRTY (not BEHIND) after a sibling PR merged"
+- "I have `gh` authenticated but I don't want to create a separate PAT"
+- "the first dependabot PRs are all major version bumps touching workflow files"
 
 Do **not** use this skill for:
 
@@ -62,11 +65,18 @@ Before changing anything, gather context. Do not skip these.
    ```
    **Also note the `author.login`** — GitHub migrated Dependabot in 2024. New PRs are authored by `app/dependabot`; legacy PRs (and any in repos that haven't migrated) are authored by `dependabot[bot]`. Your auto-merge workflow's `if:` line must match the one the repo actually uses — see Pitfall 8.
 4. **Read the actual check names** that GitHub is generating, not what you assume. See Pitfall 3.
-5. **Inventory available PAT secrets**:
+5. **Inventory available tokens**:
    ```bash
    gh secret list
+   gh auth token | cut -c1-10   # check the prefix — gho_ (OAuth) vs ghp_ (classic PAT) vs github_pat_ (fine-grained)
    ```
-   You need at least one PAT with `repo` + `workflow` scope for auto-merge to work on PRs that modify `.github/workflows/*.yml`. `GITHUB_TOKEN` is not sufficient — see Pitfall 5. If none exists, ask the user to create one.
+
+   **Two paths, pick the easier one**:
+
+   - **If the user is the repo admin and `gh` is authenticated** — the existing user OAuth token (`gho_*` prefix) has implicit `workflow` scope for repos where the user is admin. You can use it directly as `MYTOKEN`. See Pitfall 5 for the smoke-test and the `gh auth refresh` anti-pattern.
+   - **Otherwise** — you need a separate PAT (classic with `repo` + `workflow` scope, or fine-grained with `Contents: write` + `Pull requests: write` + `Actions: write`). Ask the user to create one and store it as a repo secret.
+
+   The classic GITHUB_TOKEN supplied to a workflow is never sufficient — it cannot enable auto-merge on PRs that modify `.github/workflows/*.yml`. See Pitfall 5.
 
 If the repo does not have `gh` auth, stop and ask the user to log in. Do not guess at branch protection.
 
@@ -81,7 +91,7 @@ There are six moving parts. All are required.
 | 1 | `.github/workflows/auto-merge.yml` | Approve and enable auto-merge on qualifying Dependabot PRs |
 | 2 | `.github/workflows/build.yml` | Run CI on `pull_request` so required checks appear on the PR |
 | 3 | `allow_auto_merge` repo setting | Precondition for `gh pr merge --auto` — see Pitfall 6 |
-| 4 | A PAT secret (`repo` + `workflow` scope) | Needed because `GITHUB_TOKEN` cannot enable auto-merge on PRs that modify `.github/workflows/*.yml` — see Pitfall 5 |
+| 4 | A token secret (`repo` + `workflow` scope) | A user OAuth token (admin) or a separate PAT. `GITHUB_TOKEN` cannot enable auto-merge on PRs that modify `.github/workflows/*.yml` — see Pitfall 5 |
 | 5 | Branch protection on `master` | Mark the CI check as required, so `gh pr merge --auto` actually waits |
 | 6 | `dependabot.yml` (recommended) | Grouping + weekly schedule + reasonable PR limit + labels are what turn "auto-merge works" into "PR noise goes to zero". See Step 6. |
 
@@ -340,11 +350,22 @@ Why this works:
 - **`applies-to: version-updates`** scopes groups to version bumps only — security updates stay in their own PRs (you usually want those reviewed individually).
 - **Same `day: monday` for all ecosystems** means the user sees one batch of dependabot activity per week, not a constant drip.
 
+### Step 7 — Self-improvement (mandatory, not optional)
+
+After all eleven Verification checks pass, before reporting success:
+
+1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
+2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
+3. **Commit the skill changes locally**. Do **not** push — the skill is loaded from a local path and has no remote.
+4. **Do not commit the project notes file** unless the user asks. The notes are useful as a local artifact and a project record; committing is the user's call.
+
+The user is paying for the optimized repo *and* an improved skill. Skipping this step means the next repo you optimize will hit the same traps.
+
 ---
 
 ## Pitfalls (read these before declaring success)
 
-These are the nine things that have actually broken in production. Re-check each one before finishing.
+These are the ten things that have actually broken in production. Re-check each one before finishing.
 
 ### Pitfall 1 — Major version updates never merge
 
@@ -406,6 +427,24 @@ If you see zero `pull_request` rows among the last 20 runs, your CI is not runni
 
 **Diagnostic**: If you're not sure which token the action is using, check the secret name. `${{ secrets.mytoken }}` (lowercase) and `${{ secrets.MYTOKEN }}` (uppercase) are different secrets — names are case-sensitive. An undefined secret silently falls back to `GITHUB_TOKEN` and produces this exact error.
 
+**Shortcut — user OAuth token, no separate PAT needed**: If the user invoking this skill is the repo admin and already has `gh` authenticated, you do not need a separate PAT. A user OAuth token (`gho_*` prefix) has implicit `workflow` scope for repos where the user is admin — it can approve and enable auto-merge on PRs that modify workflow files. Use it directly:
+
+```bash
+TOKEN=$(gh auth token)
+gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"
+```
+
+Verify the scope with a smoke test on any open workflow-touching Dependabot PR:
+
+```bash
+gh pr merge <N> --auto --rebase
+gh pr view <N> --json autoMergeRequest --jq '.autoMergeRequest.enabledBy.login'
+```
+
+If the second command prints a real login (e.g. `XenoAmess`), the token has sufficient scope. The PR's `autoMergeRequest` is now set; CI will run and the merge will fire when green. If the command fails with the `enablePullRequestAutoMerge` GraphQL error, the token is a classic PAT or app token without `workflow` — fall back to the separate-PAT path.
+
+**Anti-pattern — `gh auth refresh -s workflow`**: do not try to add the `workflow` scope to an existing OAuth token from a non-interactive CLI session. The command will hang waiting for a browser confirmation. Either use the shortcut above (if the user is admin), or ask the user to add the scope via the GitHub web UI (`Settings → Developer settings → Personal access tokens → [token] → Edit scopes → Workflow ✓ → Update token`) and then continue.
+
 ### Pitfall 6 — `allow_auto_merge` is off at the repo level
 
 **Symptom**: `gh pr merge --auto` returns 422 / "Auto merge is not allowed for this repository". The auto-merge workflow succeeds (no error in the step), but the PR's `autoMergeRequest` stays null.
@@ -451,6 +490,8 @@ Eventually one PR wins the race (lowest rebase count + no contention), but the r
 - **Group updates in dependabot.yml** — a single grouped PR (e.g. "maven-minor-and-patch" with N updates) collapses N PRs into 1, eliminating the race almost entirely.
 
 **Do not** keep refreshing the PR page hoping it will clear. The state is genuinely stuck until something pushes master or dependabot re-rebases.
+
+**Adjacent-line variant — the race produces DIRTY, not BEHIND**: when two parallel Dependabot PRs both touch adjacent lines in the same file (e.g. both bump a different action version in `build.yml`), the second to rebase after the first's merge can hit `mergeStateStatus: DIRTY`, a real merge conflict, not a stale-base issue. Cause: PR A's merge removed a context line that PR B's diff was anchored to (e.g. PR B's diff had `actions/checkout@v6` as a context line, and PR A's merge changed it to `@v7`). The rebase patch no longer applies cleanly. The good news: dependabot's next hourly auto-rebase regenerates the diff with the new context and usually succeeds. The bad news: that means another hour of waiting, with the PR showing DIRTY the whole time. **Do not push a manual fix — see Pitfall 10.** Either wait, or `@dependabot rebase` to force the next attempt sooner.
 
 ### Pitfall 8 — Dependabot login mismatch: `app/dependabot` vs `dependabot[bot]`
 
@@ -510,22 +551,41 @@ If the actual check names have `isRequired: false` (or no entry exists under tha
 
 **Bonus**: this also bites if you rename the workflow file or the job name. Anything that changes the canonical check name must trigger a branch protection review.
 
+### Pitfall 10 — Manually fixing DIRTY rebase conflicts desyncs the PR
+
+**Symptom**: A dependabot PR sits at `mergeStateStatus: DIRTY` (real conflict, see Pitfall 7 adjacent-line variant). The natural response is to fetch the PR branch, resolve the conflict locally, and push. The PR shows CLEAN after the push, the auto-merge workflow re-runs, the merge happens. Problem solved — right?
+
+**Cause**: There is no bug to fix. This is a trap.
+
+**Why the manual push is wrong**:
+
+- The push is **not** signed by dependabot. The PR's commit author changes from `dependabot[bot]` to your login, while the PR's `user.login` (dependabot) stays the same. This dual-identity state can confuse integrations that key off commit author (CODEOWNERS, security alerts, some branch policies).
+- Subsequent dependabot activity on the same PR — for example, a second rebase triggered by the user commenting `@dependabot rebase` — will collide with your non-dependabot commits. The branch's history becomes a mix of signed and unsigned commits, and you may find yourself in a "fixup commit" loop.
+- The real resolution is already on its way. Dependabot re-rebases on its hourly schedule; the second attempt usually succeeds because the conflict is now between a fresh diff and the latest master.
+
+**Fix**: Do nothing. Wait for the next hourly dependabot rebase cycle. If you need it faster, `@dependabot rebase` on the PR — but do **not** push a manual fix.
+
+**Diagnostic when you are tempted to fix**: `git fetch origin <head-ref>` + `git checkout <head-ref>`. If the file already shows the correct final state (e.g. `actions/checkout@v7` and `actions/cache@v6`), dependabot has already re-rebased and your push is redundant. If the file shows a partial state, wait one more cycle and re-check; do not push.
+
+**Why this deserves its own pitfall**: the "DIRTY" state in GitHub's merge status is *meant* to signal "needs human resolution", so the manual-fix reflex is correct in the general case. It is wrong specifically for dependabot PRs because the bot is on a timer that will retry automatically. Forgetting that distinction costs you the PR's signed-commit guarantee.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all ten checks pass.
+Do not tell the user "done" until all eleven checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
 3. **Required check is actually required**: GraphQL query in Step 4 returns `isRequired: true` for the CI check(s).
 4. **Patch auto-merges**: trigger a patch bump (e.g. dependabot creates one overnight), confirm it gets approved and merged within a few minutes.
 5. **GitHub Actions major auto-merges**: trigger a github-actions major bump. Confirm same as above.
-6. **Maven major does NOT auto-merge**: trigger a maven major bump. Confirm the PR is approved by the bot but stays open with `auto-merge: false`.
+6. **Maven major does NOT auto-merge**: trigger a maven major bump. Confirm the PR is approved by the bot but stays open with `autoMerge: false`.
 7. **No double-runs**: in the Actions tab, the latest dependabot PR should have exactly `N` CI runs (where `N` is the size of the matrix), not `2N`.
 8. **Auto-merge workflow uses the right token**: open the auto-merge workflow run for a workflow-touching PR (e.g. an `actions/checkout` bump). The Approve and Enable auto-merge steps should NOT show the `workflows` permission error.
 9. **Auto-merge workflow actually runs on Dependabot PRs**: in the Actions tab, filter by `auto-merge.yml` and confirm there is at least one run per recent open Dependabot PR (not zero). If the count is zero across all open PRs, Pitfall 8 (login mismatch) is the cause.
 10. **CI is triggered by `pull_request` events, not just `push`**: `gh run list --workflow="<build workflow>" --limit 20 --json event --jq '.[].event'` should show a healthy mix including `pull_request`. If every row says `push`, the `on:` block is wrong (Pitfall 2 subtle variant — CI "looks like it works" because Dependabot pushes on rebase).
+11. **`MYTOKEN` has the required scope (no separate PAT needed if you took the user-OAuth-token path)**: `gh pr merge <N> --auto --rebase` on any open workflow-touching Dependabot PR sets `autoMergeRequest.enabledBy` to a real login (not null, not `web-flow`). This proves the secret has the implicit `workflow` scope. If you took the separate-PAT path, this is covered by check 8.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -534,9 +594,51 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all checks pass), audit what you actually learned during **this** run
-and update this file before finishing the conversation. This is not
-optional polish — it is part of the deliverable.
+(all eleven checks pass), audit what you actually learned during
+**this** run and update this file before finishing the conversation.
+This is not optional polish — it is part of the deliverable. **Step 7**
+of Implementation makes this a required step, not a recommended one.
+
+### Per-project notes file (companion to the skill update)
+
+For every project you apply this skill to, write a per-project notes
+file at `<project>/docs/dependabot-optimization-notes.md`. This is a
+project-local companion to the skill — the project owner reads it to
+understand what changed and why, and you reference it when updating
+the skill.
+
+Use this template (adapt the sections; do not omit any):
+
+```markdown
+# Dependabot Optimization Notes — <project-name>
+
+## Context
+- Project: <owner>/<repo> (<lang>/<ecosystem>)
+- Default branch: <name>
+- Dependabot ecosystems: <list>
+- CI matrix: <axes and dimensions>
+- Pre-optimization state: <open PRs, branch protection, allow_auto_merge>
+
+## What was done
+<numbered list of changes>
+
+## What worked first time
+<list>
+
+## What was tricky / required iteration
+<list>
+
+## Key findings (also fed back to the skill)
+<numbered list, each linking to the relevant Pitfall / Snag / Verification change>
+
+## Verification results
+<table of 11 checks, with actual results>
+```
+
+After writing the per-project notes, perform the skill update as
+described below. Both are required before reporting "done".
+
+### When to update the skill
 
 ### When to update the skill
 
@@ -571,8 +673,8 @@ Do **not** update the skill when:
 
 1. Make the **minimum surgical edit** that captures the lesson. Do not
    rewrite sections that still apply; append or insert.
-2. Update affected counts (e.g. "eight pitfalls" → "nine pitfalls",
-   "nine verification checks" → "ten"). Grep for the old count first
+2. Update affected counts (e.g. "nine pitfalls" → "ten pitfalls",
+   "ten verification checks" → "eleven"). Grep for the old count first
    to catch every reference.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
@@ -639,6 +741,40 @@ the previous revision):
   broke auto-merge", "PRs went BEHIND after I pushed the workflow")
   added to description.
 
+After optimizing `cyanpotion/cyan_zip` (the run that produced the
+latest revision):
+
+- **Pitfall 10 added**: manually pushing a fix to a `mergeStateStatus:
+  DIRTY` dependabot PR looks correct but desyncs the PR's signed-commit
+  author and creates a fixup-commit loop. Symptom is the urge to "just
+  fix the conflict", which is the right reflex for human-authored PRs
+  but wrong for dependabot. Fix: wait, or `@dependabot rebase`. See
+  Pitfall 7 adjacent-line variant for the trigger.
+- **Pitfall 7 enriched** with the adjacent-line DIRTY variant. When two
+  parallel dependabot PRs both touch adjacent lines in the same file
+  (e.g. both bump a different action version in `build.yml`), the
+  second to rebase can hit a real merge conflict, not just BEHIND.
+- **Pitfall 5 enriched** with the user-OAuth-token shortcut: if the
+  user is admin and `gh` is authenticated, `gh auth token` works as
+  `MYTOKEN` directly. Also added the `gh auth refresh -s workflow`
+  anti-pattern — it hangs in non-interactive sessions.
+- **Verification check #11 added**: smoke-test `MYTOKEN` scope with
+  `gh pr merge --auto` on a workflow-touching PR.
+- **Pre-flight 5 enriched** with the user-OAuth-token path.
+- **Two new snags**: the first dependabot batch tests the hardest path
+  (major version bumps touching workflow files); the GitHub App login
+  normalization quirk is undocumented behavior that may change.
+- **Counts bumped**: nine → ten pitfalls, ten → eleven verification
+  checks. New trigger phrases ("I have `gh` but I don't want to
+  create a separate PAT", "rebase produced a real conflict not just
+  BEHIND", "first batch of dependabot PRs are all major version bumps
+  touching workflow files") added to description.
+- **Self-improvement loop elevated** from "section to read" to "Step 7
+  of Implementation" with a per-project docs file convention
+  (`<project>/docs/dependabot-optimization-notes.md`). Both writing
+  the doc and updating the skill are required deliverables, not
+  optional polish.
+
 One commit, ~140 insertions, no rewrite. This is the expected shape of
 an update: targeted edits, counts grepped, README synced, single commit.
 
@@ -657,7 +793,7 @@ an update: targeted edits, counts grepped, README synced, single commit.
   | `CLEAN` | ready to merge, all checks pass | wait for auto-merge to fire |
   | `BEHIND` | base branch has new commits the PR doesn't have | see Pitfall 7 |
   | `BLOCKED` | a required review or check is missing | inspect the PR |
-  | `DIRTY` | has a real merge conflict (not just "behind") | manual resolution required |
+  | `DIRTY` | has a real merge conflict (not just "behind") | **for dependabot PRs: see Pitfall 10 — do NOT push a manual fix**, wait or `@dependabot rebase`. For human PRs: resolve the conflict. |
   | `UNSTABLE` | checks are still running or one just failed | wait or look at the failed check |
   | `UNKNOWN` | GitHub is still computing the state | refresh in a few seconds |
 
@@ -690,6 +826,12 @@ an update: targeted edits, counts grepped, README synced, single commit.
 - **Grouping in dependabot.yml closes the old individual PRs.** When you add a `groups:` block to an ecosystem that already has individual PRs open, Dependabot on the next cycle closes those individual PRs and opens a single grouped PR with a title like `chore(deps): bump the major group with 2 updates`. This is expected — the old PRs show up as `CLOSED` (not merged), the new grouped PR inherits their changes, and `update-type` for the grouped PR reports the highest-severity bump in the group. Don't panic if your "verified working" PRs vanish from the open list; the replacement is the grouped PR.
 
 - **`AdoptOpenJDK` distribution is being phased out.** `actions/setup-java` with `distribution: adopt` now emits an annotation warning that AdoptOpenJDK has moved to Eclipse Temurin. Recommended: change to `distribution: temurin` in the CI workflow. Non-blocking but visible in the Actions tab.
+
+- **The first dependabot batch tests the hardest path.** If the repo has not been kept up to date, the very first dependabot cycle after enabling this skill will open N major version bumps, most of which touch `.github/workflows/*.yml`. That means the first PRs to be tested are exactly the ones that need the `workflow` scope on `MYTOKEN` and the `gh pr merge --auto` API call. If anything is misconfigured with the token, it shows up immediately. Plan for this: do the Pre-flight 5 scope check *before* the first batch lands, not after.
+
+- **`gh auth refresh -s workflow` hangs in non-interactive CLI sessions.** If you try to add the `workflow` scope to an existing OAuth token from a non-interactive session, the command blocks waiting for a browser confirmation. It will not time out on its own; you have to Ctrl-C it. Either take the user-OAuth-token shortcut (Pitfall 5) and use the token as-is, or ask the user to add the scope via the web UI at `Settings → Developer settings → Personal access tokens → [token] → Edit scopes → Workflow ✓`. Do not retry the refresh in a loop.
+
+- **User OAuth token login normalization is undocumented and may change.** Even when `gh pr list --json author` shows `app/dependabot` for a PR opened by the new Dependabot GitHub App, the value of `github.event.pull_request.user.login` inside the workflow run is normalized to `dependabot[bot]`. This means a workflow gated on the legacy form will silently work on a fully migrated repo. The match-both `||` form (Pitfall 8) is still the right defense — the normalization is undocumented behavior and could be removed in a future GitHub update.
 
 ---
 
@@ -738,6 +880,15 @@ gh pr list --state open --json number,author \
 
 # Set git remote to SSH (when gh OAuth lacks workflow scope)
 git remote set-url origin git@github.com:<owner>/<repo>.git
+
+# Use the existing gh OAuth token as MYTOKEN (when user is admin — Pitfall 5 shortcut)
+TOKEN=$(gh auth token)
+gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"
+
+# Smoke-test MYTOKEN scope on a workflow-touching Dependabot PR
+gh pr merge <N> --auto --rebase
+gh pr view <N> --json autoMergeRequest --jq '.autoMergeRequest.enabledBy.login'
+# Expect: a real login (e.g. "XenoAmess"). If null, the token lacks the scope.
 ```
 
 ---
@@ -752,10 +903,14 @@ git remote set-url origin git@github.com:<owner>/<repo>.git
 - "I changed the workflow but old PRs aren't auto-merging with the new logic" → close + reopen each open PR. See Snags.
 - "My PRs are stuck at `BEHIND` even though CI passes" → Pitfall 7. Easiest fix: run the batch rebase script in Quick Reference on all open Dependabot PRs.
 - "The auto-merge workflow says 'OAuth App cannot create or update workflow'" → your `gh` token lacks the `workflow` scope. Either switch the git remote to SSH (Quick Reference) or use a fine-grained PAT.
-- "I have a PAT but it's still using `GITHUB_TOKEN`" → check the secret name case (`secrets.mytoken` ≠ `secrets.MYTOKEN`). `gh secret list` shows the actual names.
+- "I have a PAT but it's still using `GITHUB_TOKEN`" → check the secret name case (`secrets.mytoken` ≠ `secrets.MYTOKEN`). `gh secret list` shows the actual names. If the user is admin, the simpler fix is to use `gh auth token` directly (Pitfall 5 shortcut).
 - "The auto-merge workflow shows `skipped` for the merge step but no error" → Pitfall 6 (`allow_auto_merge` off). Run the run-log diagnostic command in Pitfall 6 to confirm.
 - "Auto-merge workflow never runs at all on Dependabot PRs" → Pitfall 8 (login mismatch). Check `author.login` on the open PRs and update the workflow's `if:` line.
 - "I bumped the JDK / OS in build.yml matrix and now PRs are BLOCKED" → Pitfall 9. Re-run Step 4 with new check names from GraphQL, then PUT branch protection again.
 - "All my Dependabot PRs went BEHIND at once after I pushed the workflow changes" → migration push snag. Batch `@dependabot rebase` on all open Dependabot PRs (Quick Reference).
 - "My old individual PRs disappeared when I added groups" → expected. They were closed; the grouped PR replaces them.
 - "CI shows green on the PR but the auto-merge workflow isn't being gated by it" → Pitfall 2 subtle variant. The CI is probably being triggered by `push` only, not `pull_request`. Confirm with `gh run list --workflow=<build> --json event` and fix the `on:` block.
+- "I have `gh` authenticated but I don't want to create a separate PAT" → Pitfall 5 user-OAuth-token shortcut. Use `gh auth token` directly as `MYTOKEN`; verify with the smoke test in Quick Reference.
+- "A dependabot PR is stuck at `DIRTY` (not BEHIND) after a sibling PR merged" → Pitfall 7 adjacent-line variant + Pitfall 10. Wait or `@dependabot rebase`; do NOT push a manual fix.
+- "I tried `gh auth refresh -s workflow` and it just hangs" → see the anti-pattern note in Pitfall 5. Use the user-OAuth-token shortcut, or ask the user to add the scope via the web UI.
+- "The first dependabot PRs are all major version bumps touching workflow files and the first one failed" → this is the worst-case test path. Re-check Pre-flight 5 (token scope), Verification check #8/#11, and Pitfall 5. The "first batch is hardest" snag explains why.
