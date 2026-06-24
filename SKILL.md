@@ -476,6 +476,88 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
 ---
 
+## Self-improvement loop (run after a successful optimization)
+
+This skill improves with every repo you apply it to. After Verification
+(all checks pass), audit what you actually learned during **this** run
+and update this file before finishing the conversation. This is not
+optional polish — it is part of the deliverable.
+
+### When to update the skill
+
+Update SKILL.md / README.md when **any** of these happened during this optimization:
+
+1. **New failure mode** — a symptom → cause → fix pattern that does not
+   match any existing Pitfall. Promote it to the next Pitfall number,
+   with the exact symptom string a future user is likely to paste at you.
+2. **Missing diagnostic** — a faster way to recognize a failure
+   (e.g. reading the workflow run log step conclusions, checking
+   `author.login` on open PRs). Add it to the existing Pitfall or as a
+   new Verification check.
+3. **Strategy gap** — a moving part that turned out to be required beyond
+   the current six (e.g. `dependabot.yml` grouping to suppress noise).
+   Add it to the Strategy table and update the count elsewhere.
+4. **Sharp edge already in scope** — a snag you hit but is not yet in
+   the Snags section (e.g. commit-prefix duplication, OAuth scope during
+   `git push`). Add it if it is general enough to recur.
+5. **New trigger phrase** — if the user described their problem with
+   words the description field would not have matched, extend the
+   description and the When-to-use list.
+6. **Stale example** — a code snippet or matrix axis that no longer
+   reflects modern practice (e.g. JDK 11 in a matrix when 11 is EOL).
+
+Do **not** update the skill when:
+
+- You only followed the existing procedure without learning anything new.
+- The lesson is project-specific and does not generalize.
+- The fix would be a one-off workaround, not a repeatable pattern.
+
+### How to update
+
+1. Make the **minimum surgical edit** that captures the lesson. Do not
+   rewrite sections that still apply; append or insert.
+2. Update affected counts (e.g. "eight pitfalls" → "nine pitfalls",
+   "nine verification checks" → "ten"). Grep for the old count first
+   to catch every reference.
+3. Update README.md to match if the count or trigger list changed.
+4. Sanity-check cross-references still resolve — a new Pitfall N+1
+   referenced from Pre-flight and Verification must actually exist.
+5. Commit locally. **Do not push** — this skill has no remote; opencode
+   loads it from a local path.
+   ```bash
+   cd /home/xenoamess/workspace/dependabot-automerge-skill
+   git add SKILL.md README.md
+   git commit -m "feat: <one-line description of the lesson learned>"
+   ```
+
+### Worked example
+
+After optimizing `XenoAmess/docker-image-rebecca` (the run that produced
+this revision):
+
+- New symptom: workflow never runs because the `if:` line checks
+  `dependabot[bot]` but the repo's PRs are authored by `app/dependabot`
+  (GitHub migrated Dependabot to a GitHub App in 2024). Promoted to
+  Pitfall 8 with the login-era table and the `||` fix.
+- Diagnostic gap: `allow_auto_merge: false` was visible in a run log as
+  a `skipped` step conclusion, not as a `failure`. Added a run-log
+  diagnostic one-liner to Pitfall 6.
+- Strategy gap: the original "dependabot.yml is optional" underplayed
+  how much grouping + weekly schedule + sensible PR limit matters for
+  user-visible noise. Promoted to Step 6 with a concrete recipe.
+- Batch rebase script in Quick Reference iterated **all** open PRs
+  instead of filtering by author — would rebase human PRs. Fixed.
+- Stale example: JDK 11 matrix axis when 11 is past EOL free support.
+  Updated to JDK 17.
+- Counts bumped: seven → eight pitfalls, eight → nine verification
+  checks. New trigger phrases ("workflow never runs", "app/dependabot
+  vs dependabot[bot]") added to description.
+
+One commit, ~140 insertions, no rewrite. This is the expected shape of
+an update: targeted edits, counts grepped, README synced, single commit.
+
+---
+
 ## Snags to watch for
 
 - **`enforce_admins: false` does not apply to Dependabot**: Dependabot opens PRs as itself, so the admin bypass does not affect it. Good — the protection will still gate Dependabot.
