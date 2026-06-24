@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -29,6 +29,10 @@ Use this skill when the user says any of:
 - "dependabot is open but not being merged"
 - "auto-merge workflow runs but does nothing / always skipped"
 - "Dependabot PRs are bot authored but my workflow never fires"
+- "dependabot PRs are stuck after I changed build.yml"
+- "branch protection required check name no longer matches"
+- "CI looks like it's running but isn't gating the PR"
+- "I bumped the JDK matrix and now auto-merge is broken"
 
 Do **not** use this skill for:
 
@@ -249,6 +253,7 @@ EOF
 - `strict: true` — PR must be rebased onto master before merge.
 - `enforce_admins: false` — let admins bypass (useful for hot-fixes).
 - `required_pull_request_reviews: null` — auto-merge should not be gated by human review.
+- `required_linear_history: true` (recommended) — keeps master history clean, which is what `--rebase` auto-merge produces anyway. Without this, admins can sneak in merge commits that defeat the whole point.
 
 ### Step 5 — Commit and push
 
@@ -339,7 +344,7 @@ Why this works:
 
 ## Pitfalls (read these before declaring success)
 
-These are the eight things that have actually broken in production. Re-check each one before finishing.
+These are the nine things that have actually broken in production. Re-check each one before finishing.
 
 ### Pitfall 1 — Major version updates never merge
 
@@ -356,6 +361,22 @@ These are the eight things that have actually broken in production. Re-check eac
 **Cause**: `build.yml` only triggers on `push`, not on `pull_request`. No required check exists on the PR, so `gh pr merge --auto` merges immediately.
 
 **Fix**: Add `pull_request:` to `on:` in the CI workflow AND set up branch protection with the resulting check marked required. Both are needed; one alone does not help.
+
+**Subtle variant — "it kind of works, but only by accident"**: a `build.yml` of just `on: [push]` may *appear* to gate PRs because Dependabot pushes to its PR branch on every rebase, which fires the `push` event, which runs CI, which then shows up in the PR's Checks tab via the branch-ref annotation. The PR can look green and auto-merge cleanly. But:
+- It depends on Dependabot's push-on-rebase behavior. If Dependabot ever switches to a cherry-pick or merge strategy, the gate silently disappears.
+- `gh run list --workflow="Java CI"` will show runs triggered by `push` events, never by `pull_request`. That's the smoking gun.
+- Any push to a non-master branch (e.g. a feature branch) also triggers CI, wasting runner minutes (Pitfall 4).
+- Branch protection's "required check" is technically satisfied by a check produced from a `push` event, not the canonical `pull_request` event. Some integrations (e.g. merge queues) care about this distinction.
+
+**Diagnostic**:
+
+```bash
+gh run list --workflow="<your build workflow>" --limit 20 \
+  --json event,headBranch,conclusion \
+  --jq '.[] | "\(.event)  \(.headBranch)  \(.conclusion)"'
+```
+
+If you see zero `pull_request` rows among the last 20 runs, your CI is not running on PR events. Fix the `on:` block (Step 2).
 
 ### Pitfall 3 — Required check name does not match
 
@@ -456,11 +477,44 @@ if: |
 
 **Same trap applies to** `github.actor == 'dependabot[bot]'` and any `dependabot` GitHub Action filter. Always use `||` with both logins.
 
+**Normalization quirk — read this if you are debugging**: even when `gh pr list --json author` shows `app/dependabot` for a PR opened by the new GitHub App, the value `github.event.pull_request.user.login` inside the workflow run is normalized back to `dependabot[bot]`. So a workflow gated on the legacy form may still "work" today, even on a fully migrated repo. The match-both form is still the right defense — the normalization is undocumented behavior and could change without notice.
+
+### Pitfall 9 — Matrix change silently invalidates branch protection required checks
+
+**Symptom**: After bumping a CI workflow matrix value (e.g. JDK `11` → `17`, or adding a new OS image to `matrix.os`), every new PR shows `mergeStateStatus: BLOCKED` even though all checks are green. The auto-merge workflow does not fire because the required checks never match anything.
+
+**Cause**: When the `matrix` axes change, the actual check name changes too — `build (ubuntu-latest, 11, false)` becomes `build (ubuntu-latest, 17, false)`. The old name is still listed as required in branch protection, but no future PR will ever produce a check by that name. New PRs produce checks under the new name, which is not required, so they are gated by zero required checks and GitHub treats them as "not satisfied".
+
+**Diagnostic**:
+
+```bash
+gh api graphql -F query='
+query {
+  repository(owner: "<owner>", name: "<repo>") {
+    pullRequest(number: <N>) {
+      statusCheckRollup {
+        contexts(first: 20) {
+          nodes {
+            ... on CheckRun { name isRequired(pullRequestNumber: <N>) }
+          }
+        }
+      }
+    }
+  }
+}' | jq '.data.repository.pullRequest.statusCheckRollup.contexts.nodes'
+```
+
+If the actual check names have `isRequired: false` (or no entry exists under that name), branch protection has gone stale relative to the CI matrix.
+
+**Fix**: After any matrix change, run Step 4 again with the new actual names from GraphQL. Treat the matrix dimensions as part of the check contract — a refactor that touches `build.yml` matrix values should always re-run Step 4 in the same change.
+
+**Bonus**: this also bites if you rename the workflow file or the job name. Anything that changes the canonical check name must trigger a branch protection review.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all nine checks pass.
+Do not tell the user "done" until all ten checks pass.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -471,6 +525,7 @@ Do not tell the user "done" until all nine checks pass.
 7. **No double-runs**: in the Actions tab, the latest dependabot PR should have exactly `N` CI runs (where `N` is the size of the matrix), not `2N`.
 8. **Auto-merge workflow uses the right token**: open the auto-merge workflow run for a workflow-touching PR (e.g. an `actions/checkout` bump). The Approve and Enable auto-merge steps should NOT show the `workflows` permission error.
 9. **Auto-merge workflow actually runs on Dependabot PRs**: in the Actions tab, filter by `auto-merge.yml` and confirm there is at least one run per recent open Dependabot PR (not zero). If the count is zero across all open PRs, Pitfall 8 (login mismatch) is the cause.
+10. **CI is triggered by `pull_request` events, not just `push`**: `gh run list --workflow="<build workflow>" --limit 20 --json event --jq '.[].event'` should show a healthy mix including `pull_request`. If every row says `push`, the `on:` block is wrong (Pitfall 2 subtle variant — CI "looks like it works" because Dependabot pushes on rebase).
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -553,6 +608,37 @@ this revision):
   checks. New trigger phrases ("workflow never runs", "app/dependabot
   vs dependabot[bot]") added to description.
 
+After optimizing `XenoAmess/x8l_idea_plugin` (the run that produced
+the previous revision):
+
+- **Pitfall 9** added: changing a CI matrix value (e.g. JDK 11 → 17)
+  silently invalidates branch protection's required check names.
+  Symptom is `mergeStateStatus: BLOCKED` with green checks, which
+  looks like a different problem. Diagnostic: GraphQL `isRequired`
+  query on the new check names.
+- **Pitfall 8 enriched** with the login normalization quirk:
+  `gh pr list` shows `app/dependabot` but the workflow context
+  returns `dependabot[bot]`. A defensive `||` is still required
+  because the normalization is undocumented.
+- **Pitfall 2 enriched** with the subtle-variant diagnostic: a
+  `build.yml` of just `on: [push]` can "accidentally work" because
+  Dependabot pushes on rebase, firing the `push` event. The CI
+  shows up on the PR via the branch-ref annotation, but it's not
+  a real `pull_request` gate. Diagnostic: `gh run list --json event`
+  should show `pull_request` rows.
+- **Verification check #10 added**: CI must be triggered by
+  `pull_request` events, not just `push` (Pitfall 2 subtle variant).
+- **Step 4 enriched**: `required_linear_history: true` recommended
+  alongside `--rebase` auto-merge.
+- **Three new snags** added: migration push flips all open PRs to
+  `BEHIND` (plan to batch rebase after), grouping in dependabot.yml
+  closes individual PRs (expected, replacement PR has highest-severity
+  type), AdoptOpenJDK → Temurin distribution migration.
+- Counts bumped: eight → nine pitfalls, nine → ten verification
+  checks. New trigger phrases ("bumped JDK matrix", "build.yml change
+  broke auto-merge", "PRs went BEHIND after I pushed the workflow")
+  added to description.
+
 One commit, ~140 insertions, no rewrite. This is the expected shape of
 an update: targeted edits, counts grepped, README synced, single commit.
 
@@ -598,6 +684,12 @@ an update: targeted edits, counts grepped, README synced, single commit.
 - **Changing `commit-message.prefix` on already-open PRs produces duplicated prefixes**. If a PR's title is already `build(deps): bump foo` and you push a new `dependabot.yml` with `commit-message.prefix: build(deps)`, the next rebase will produce `build(deps)(deps): bump foo`. Cosmetic only — does not break auto-merge. To clean up, `close+reopen` the affected PR; the next dependabot push will regenerate the title under the new prefix.
 
 - **`open-pull-requests-limit: 100` is a foot-gun**. The Dependabot default is 5. Daily schedule + limit 100 = a backlog that never drains and a noisy PR tab. Recommended defaults: `weekly` schedule, limit 5–10 for github-actions, 10–20 for maven. Grouped updates (`groups:` in dependabot.yml) reduce the multiplier — one grouped PR replaces N individual ones.
+
+- **Migration push makes every open Dependabot PR go `BEHIND` at once.** When you push the auto-merge / dependabot.yml / build.yml changes that this skill recommends, master advances by one or more commits. Every open Dependabot PR that was previously `CLEAN` instantly becomes `BEHIND`. With `strict: true` branch protection, auto-merge cannot fire until each one rebases — and Dependabot's auto-rebase is hourly, not instant. Two options: (a) comment `@dependabot rebase` on every open PR in one batch (the Quick Reference batch script filters by author so it skips human PRs), or (b) accept that the queue will drain within ~1h. Plan for this in the migration order: push workflow changes → immediately batch-rebase all open Dependabot PRs → wait for them to settle → run the verification checklist.
+
+- **Grouping in dependabot.yml closes the old individual PRs.** When you add a `groups:` block to an ecosystem that already has individual PRs open, Dependabot on the next cycle closes those individual PRs and opens a single grouped PR with a title like `chore(deps): bump the major group with 2 updates`. This is expected — the old PRs show up as `CLOSED` (not merged), the new grouped PR inherits their changes, and `update-type` for the grouped PR reports the highest-severity bump in the group. Don't panic if your "verified working" PRs vanish from the open list; the replacement is the grouped PR.
+
+- **`AdoptOpenJDK` distribution is being phased out.** `actions/setup-java` with `distribution: adopt` now emits an annotation warning that AdoptOpenJDK has moved to Eclipse Temurin. Recommended: change to `distribution: temurin` in the CI workflow. Non-blocking but visible in the Actions tab.
 
 ---
 
@@ -663,3 +755,7 @@ git remote set-url origin git@github.com:<owner>/<repo>.git
 - "I have a PAT but it's still using `GITHUB_TOKEN`" → check the secret name case (`secrets.mytoken` ≠ `secrets.MYTOKEN`). `gh secret list` shows the actual names.
 - "The auto-merge workflow shows `skipped` for the merge step but no error" → Pitfall 6 (`allow_auto_merge` off). Run the run-log diagnostic command in Pitfall 6 to confirm.
 - "Auto-merge workflow never runs at all on Dependabot PRs" → Pitfall 8 (login mismatch). Check `author.login` on the open PRs and update the workflow's `if:` line.
+- "I bumped the JDK / OS in build.yml matrix and now PRs are BLOCKED" → Pitfall 9. Re-run Step 4 with new check names from GraphQL, then PUT branch protection again.
+- "All my Dependabot PRs went BEHIND at once after I pushed the workflow changes" → migration push snag. Batch `@dependabot rebase` on all open Dependabot PRs (Quick Reference).
+- "My old individual PRs disappeared when I added groups" → expected. They were closed; the grouped PR replaces them.
+- "CI shows green on the PR but the auto-merge workflow isn't being gated by it" → Pitfall 2 subtle variant. The CI is probably being triggered by `push` only, not `pull_request`. Confirm with `gh run list --workflow=<build> --json event` and fix the `on:` block.

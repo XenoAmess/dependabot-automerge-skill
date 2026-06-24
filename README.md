@@ -1,6 +1,6 @@
 # dependabot-automerge-skill
 
-An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the eight "Pitfalls" sections are the things that have actually broken in production.
+An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the nine "Pitfalls" sections are the things that have actually broken in production.
 
 ## What it does
 
@@ -12,7 +12,7 @@ When triggered, the skill:
 4. Enables `allow_auto_merge` at the repo level.
 5. Sets branch protection with the **actual** required check name(s) — discovered from GraphQL, not guessed.
 6. Hardens `dependabot.yml` (weekly schedule, grouped updates, sensible PR limit, labels) so the user doesn't drown in noise.
-7. Verifies the setup against nine concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode.
+7. Verifies the setup against ten concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode and a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern.
 
 ## When the skill triggers
 
@@ -29,6 +29,10 @@ It activates on phrases like:
 - "I changed auto-merge.yml and nothing happened"
 - "auto-merge workflow never runs / always skipped"
 - "app/dependabot vs dependabot[bot]"
+- "I bumped the JDK matrix and now auto-merge is broken"
+- "dependabot PRs stuck after I changed build.yml"
+- "CI looks like it's running but isn't gating the PR"
+- "all my dependabot PRs went BEHIND at once"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
@@ -59,7 +63,7 @@ The skill itself is a single `SKILL.md` file. opencode scans for `**/SKILL.md` i
 
 ## Why a single file?
 
-opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the four pitfalls, and the verification checklist in one place, with no extra navigation.
+opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the nine pitfalls, and the verification checklist in one place, with no extra navigation.
 
 ## License
 
