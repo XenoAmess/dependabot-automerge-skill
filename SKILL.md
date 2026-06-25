@@ -348,7 +348,7 @@ Why this works:
 
 ### Step 7 — Self-improvement (mandatory, not optional)
 
-After all thirteen Verification checks pass, before reporting success:
+After all fourteen Verification checks pass, before reporting success:
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
 2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
@@ -663,11 +663,35 @@ query {
 
 **Why this deserves its own pitfall**: the previous recipe in this skill is what produced PRs of this shape. Anyone who followed it is sitting on a backlog of giant grouped PRs that are hard to review and hard to debug. The recipe looked like a free win (collapse N PRs into 1), but the failure mode (a 3-bump PR that breaks three things at once) is the exact opposite of what dependabot is supposed to provide. If you already have `groups:` with `patterns: ["*"]` in your config, drop them on the next push — the next cycle will reopen the individual PRs, each with the right `update-type` so the auto-merge policy picks them up correctly.
 
+### Pitfall 14 — Pushing a fix to `auto-merge.yml` does not re-evaluate existing stuck PRs
+
+**Symptom**: You push a fix to `.github/workflows/auto-merge.yml` to address Pitfall 1 (add `semver-major`), Pitfall 5 (switch to `MYTOKEN`), Pitfall 8 (add `app/dependabot` login), or any other workflow bug. The new workflow is now active on master. But the **existing** dependabot PRs that were stuck under the old workflow are still stuck — they show `autoMergeRequest: null` and `mergeStateStatus: CLEAN` (green CI, no auto-merge). Hours pass. Nothing changes. The fix appears to have done nothing.
+
+**Cause**: The auto-merge workflow has `on: pull_request` — it runs when a pull request is `opened`, `synchronize`d, or `reopened`. Editing the workflow file in master does **not** synchronize existing PRs; it only changes the workflow definition for *future* events on those PRs. An existing stuck PR with no new commits on its head branch will not fire the new workflow, ever, until something pushes to that branch.
+
+**Fix**: Comment `@dependabot rebase` on each open dependabot PR you want re-evaluated. This forces dependabot to push a new commit (or `@dependabot recreate` if rebase cannot apply cleanly because of a DIRTY conflict with a sibling PR that just merged — see Pitfall 7 adjacent-line variant). Either action fires a `synchronize` event on the PR, which runs the new workflow.
+
+```bash
+for n in $(gh pr list --state open --author app/dependabot --json number --jq '.[].number'); do
+  gh pr comment "$n" --body "@dependabot rebase"
+done
+```
+
+**Diagnostic to confirm the new workflow fired**:
+
+```bash
+gh run list --workflow="Dependabot auto-merge" --limit 10 --json headBranch,conclusion,createdAt
+```
+
+You should see a fresh run for each rebased PR's `headRefName` with a `createdAt` within the last few minutes. The per-step conclusions of that new run should show `Approve dependabot PR` and `Enable auto-merge` as `success` (not `skipped`) — `skipped` means the new workflow still classified the PR as ineligible (which is a different problem; re-check Pitfall 1's policy table).
+
+**Why this deserves its own pitfall**: any time you change `auto-merge.yml` — whether to fix a login mismatch, add a `semver-major` branch, or switch tokens — the fix is invisible to existing PRs until they get a new commit. The "push a fix and watch it work" mental model applies to the next *new* dependabot PR, not to the ones already on the PR list. Forgetting this is the difference between "the optimization worked" and "the optimization worked for next week but my PRs from last week are still stuck". This pitfall is what makes the other pitfalls tractable in a single optimization session instead of "wait for the next cycle".
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all thirteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
+Do not tell the user "done" until all fourteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -682,6 +706,7 @@ Do not tell the user "done" until all thirteen checks pass. After that, do not r
 11. **`MYTOKEN` has the required scope (no separate PAT needed if you took the user-OAuth-token path)**: `gh pr merge <N> --auto --rebase` on any open workflow-touching Dependabot PR sets `autoMergeRequest.enabledBy` to a real login (not null, not `web-flow`). This proves the secret has the implicit `workflow` scope. If you took the separate-PAT path, this is covered by check 8.
 12. **No duplicate check names across multiple CI workflows**: GraphQL query on the check rollup of any open PR should show each `<job> (<matrix>)` exactly once. If the same name appears twice (different `databaseId`), Pitfall 12 applies — branch protection's "required" gate is ambiguous, and a failure in one workflow can be masked by a success in the other. Also: when running `gh secret set MYTOKEN`, verify the secret actually has a value (not an empty string); an empty secret shows as `GH_TOKEN: ` (colon with no value) in the workflow log, not as `GH_TOKEN: ***` (Pitfall 5 empty-secret diagnostic).
 13. **No `groups:` with `patterns: ["*"]` in `dependabot.yml`**: `cat .github/dependabot.yml` should not contain `patterns: ["*"]` anywhere. If it does, Pitfall 13 applies — the next weekly cycle will open a single multi-dependency PR, and any failure in that PR is un-attributable to a specific bump. Drop the `groups:` block on the next push; the next cycle will reopen the individual PRs, each tagged with the right `update-type` so the auto-merge policy picks them up correctly. One PR per dependency per cycle is the right shape.
+14. **Open dependabot PRs are re-evaluated after the auto-merge workflow changes**: after pushing changes to `.github/workflows/auto-merge.yml`, comment `@dependabot rebase` on each open dependabot PR (or use the one-liner in Pitfall 14). Within a few minutes, `gh run list --workflow="Dependabot auto-merge" --json headBranch,conclusion` should show a fresh `success` run on each rebased PR's branch — *not* zero runs (Pitfall 14 — workflow file change does not synchronize existing PRs). The per-step conclusions on that new run should be `success` (or `skipped` for steps the policy intentionally bypasses), not `failure` with a `workflows` permission error (Pitfall 5) or a `Not Found` (Pitfall 6, repo flag off).
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -690,7 +715,7 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all thirteen checks pass), audit what you actually learned during
+(all fourteen checks pass), audit what you actually learned during
 **this** run and update this file before finishing the conversation.
 This is not optional polish — it is part of the deliverable. **Step 7**
 of Implementation makes this a required step, not a recommended one.
@@ -728,7 +753,7 @@ Use this template (adapt the sections; do not omit any):
 <numbered list, each linking to the relevant Pitfall / Snag / Verification change>
 
 ## Verification results
-<table of 12 checks, with actual results>
+<table of 14 checks, with actual results>
 ```
 
 After writing the per-project notes, perform the skill update as
@@ -769,10 +794,10 @@ Do **not** update the skill when:
 
 1. Make the **minimum surgical edit** that captures the lesson. Do not
    rewrite sections that still apply; append or insert.
-2. Update affected counts (e.g. "eleven pitfalls" → "twelve pitfalls",
-   "twelve verification checks" → "thirteen"). Grep for the old count first
-   to catch every reference. The current target is thirteen pitfalls and
-   thirteen verification checks.
+2. Update affected counts (e.g. "thirteen pitfalls" → "fourteen pitfalls",
+   "thirteen verification checks" → "fourteen"). Grep for the old count first
+   to catch every reference. The current target is fourteen pitfalls and
+   fourteen verification checks.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
    referenced from Pre-flight and Verification must actually exist.
