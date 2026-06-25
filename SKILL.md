@@ -357,16 +357,14 @@ Why this works:
 - **Same `day: monday` for all ecosystems** means the user sees one batch of dependabot activity per week, not a constant drip.
 - **For per-PR auto-merge policy**, the auto-merge workflow's existing `update-type` check (Step 1) reads the bump's `semver-*` classification directly from dependabot's metadata — that already works correctly without `groups:`.
 
-### Step 7 — Self-improvement (mandatory, not optional)
+### Step 7 — Skill update + per-project notes (required deliverable, not polish)
 
-After all fifteen Verification checks pass, before reporting success:
+After all fifteen Verification checks pass, before reporting success. This step is a **deliverable**, not meta-cleanup: the user is paying for the optimized repo *and* an improved skill. Skipping this step means the next repo you optimize will hit the same traps, and the user has historically had to prompt for it (see the Worked-Example entry for `XenoAmess/XenoAmessBlog` and the "Final checklist before reporting done" section below).
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
-2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
+2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section below for what qualifies and how to do it.
 3. **Commit the skill changes locally**. Do **not** push — the skill is loaded from a local path and has no remote.
 4. **Do not commit the project notes file** unless the user asks. The notes are useful as a local artifact and a project record; committing is the user's call.
-
-The user is paying for the optimized repo *and* an improved skill. Skipping this step means the next repo you optimize will hit the same traps.
 
 ---
 
@@ -810,7 +808,7 @@ The masking indicator (`***` vs empty) is the smoking gun. Look at the env block
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all fifteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
+Do not tell the user "done" until all fifteen checks pass. After that, do not report "done" without also completing Step 7 and running the **Final checklist before reporting done** section below — both halves of the deliverable must be visible in the same reply.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -829,6 +827,30 @@ Do not tell the user "done" until all fifteen checks pass. After that, do not re
 15. **No `DIRTY` regression on workflow-touching PRs after rewriting `auto-merge.yml`**: if any open dependabot PR bumps an action used in `auto-merge.yml` (or in any other file your rewrite modified), `gh pr view <N> --json mergeStateStatus,mergeable` should not show `DIRTY`/`CONFLICTING`. If it does, the PR's rebase failed because your rewrite removed the line the PR was trying to change — comment `@dependabot recreate` on it (Pitfall 15), wait for the new commit, and re-check. After recreate, `mergeable: MERGEABLE` and the auto-merge workflow re-runs against the new diff.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
+
+---
+
+## Final checklist before reporting done
+
+Run through this list *immediately before* sending the success message. Every box must be checked. The historical failure mode is "the optimization worked, the agent reported done, the user had to prompt 'did you update the skill?'" — this checklist exists to make that lapse impossible to repeat.
+
+**Project-side deliverables**
+
+- [ ] The optimization changes are committed and pushed to the project's default branch.
+- [ ] `gh pr list --state open` returns either `[]` or only PRs the user has explicitly chosen to leave open. A non-empty list means at least one dependabot PR did not drain — diagnose why before reporting done.
+- [ ] Master history is linear (`gh api repos/<owner>/<repo>/commits/master --jq '.parents | length'` for recent commits should consistently be `1`, not `2`). `--rebase` auto-merge produces linear history; a merge commit means something merged outside auto-merge.
+- [ ] Per-project notes file written at `<project>/docs/dependabot-optimization-notes.md`. Template is in the Self-improvement loop section below; required sections are Context, What was done, What worked first time, What was tricky / required iteration, Key findings, Verification results. Do **not** commit this file unless the user asks.
+
+**Skill-side deliverables (Step 7)**
+
+- [ ] `SKILL.md` updated with anything genuinely new from this run: new pitfalls, snag enrichments, worked-example entry, trigger phrases, count bumps if applicable. Do not rewrite unaffected sections — the goal is a surgical diff that captures the lesson.
+- [ ] `README.md` synced if `SKILL.md` changed: trigger-phrase list bumped, pitfall count bumped if it changed, Worked-example project list bumped if a new project was added.
+- [ ] Skill changes committed locally (`git commit` in `/home/xenoamess/workspace/dependabot-automerge-skill`). **Do not push** — the skill has no remote and is loaded from a local path.
+- [ ] The commit message follows the pattern used by prior runs (e.g. `skill: <project> worked example + <one-line summary of lesson>`).
+
+**Reporting**
+
+- [ ] The success message lists both halves of the deliverable: "project optimized" *and* "skill updated and committed locally as `<sha>`". A success message that only mentions the project is the historical lapse pattern — make both halves visible in the same reply.
 
 ---
 
@@ -1443,6 +1465,9 @@ PRs across two ecosystems.
   skill update followed. The agent originally forgot the skill
   update and the user had to prompt for it; documenting that lapse
   here so future runs treat both halves as a single deliverable.
+  The same lapse recurred in the very next run
+  (`xenaomess-shade/shade_asm`); see the **Final checklist before
+  reporting done** section, which was added in response.
 
 After optimizing `xenaomess-shade/shade_asm` (the run that produced
 this revision): a small Maven shade-jar repo under the
