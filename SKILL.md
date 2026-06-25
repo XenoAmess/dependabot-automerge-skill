@@ -498,6 +498,15 @@ Eventually one PR wins the race (lowest rebase count + no contention), but the r
 
 **Adjacent-line variant — the race produces DIRTY, not BEHIND**: when two parallel Dependabot PRs both touch adjacent lines in the same file (e.g. both bump a different action version in `build.yml`), the second to rebase after the first's merge can hit `mergeStateStatus: DIRTY`, a real merge conflict, not a stale-base issue. Cause: PR A's merge removed a context line that PR B's diff was anchored to (e.g. PR B's diff had `actions/checkout@v6` as a context line, and PR A's merge changed it to `@v7`). The rebase patch no longer applies cleanly. The good news: dependabot's next hourly auto-rebase regenerates the diff with the new context and usually succeeds. The bad news: that means another hour of waiting, with the PR showing DIRTY the whole time. **Do not push a manual fix — see Pitfall 10.** Either wait, or `@dependabot rebase` to force the next attempt sooner.
 
+**Stale-base variant — `@dependabot rebase` says "The base commit has not changed" while GitHub still shows BEHIND**: a subtler case observed after a migration push. You post `@dependabot rebase`, and dependabot replies with "The base commit for this pull request has not changed." But `gh pr view <N> --json mergeStateStatus` clearly says `BEHIND`. Cause: dependabot's *internal* view of the base is whatever it last synced from master — typically the SHA when the PR was opened. If master has since moved (e.g. you pushed the auto-merge/dependabot.yml changes from this skill), dependabot's view of the base is stale, and the rebase command short-circuits with that message. GitHub's merge status, by contrast, compares against the live `master` HEAD, so it correctly reports BEHIND. The fix is `@dependabot recreate` (not `rebase`) — recreate forces a fresh commit generated against the current master, which then sets the base to the live HEAD and lets the auto-merge workflow re-enable auto-merge on a CLEAN diff. Useful one-liner:
+
+```bash
+# For a PR stuck BEHIND where @dependabot rebase says "no change":
+gh pr comment <N> --body "@dependabot recreate"
+```
+
+After recreate, expect: (1) dependabot pushes a new commit, (2) CI re-runs, (3) auto-merge workflow re-runs and re-enables auto-merge, (4) merge fires. This is the same wait as the rebase variant above, but it bypasses the stale-base refusal.
+
 ### Pitfall 8 — Dependabot login mismatch: `app/dependabot` vs `dependabot[bot]`
 
 **Symptom**: Dependabot PRs are open, the workflow file exists, but `auto-merge` never runs on any of them. The Actions tab shows zero runs of `auto-merge.yml` for the open Dependabot PRs (or runs only on PRs that pre-date the login migration). The `if:` condition evaluates to false silently.
@@ -1008,11 +1017,28 @@ PR exposed a long chain of latent issues):
   were also bumped to "thirteen".
 
 One commit, ~85 insertions (one new pitfall, one verification
-check, one snag, one Step-6 rewrite, one worked-example entry,
+check, one snag, a Step-6 rewrite, one worked-example entry,
 trigger-phrase bumps in two places), no rewrite of the
 unaffected sections. The previous count was twelve pitfalls /
 twelve verification; grepping the file for "twelve" before
 editing caught the README references that needed bumping.
+
+After optimizing `XenoAmess/to4096Words` (the run that produced
+this revision):
+
+- **Pitfall 7 enriched** with a "stale-base variant": posting
+  `@dependabot rebase` on a PR stuck at `BEHIND` returns "The
+  base commit for this pull request has not changed" when
+  dependabot's *internal* view of the base is older than the
+  live `master` HEAD (typical after a migration push). The fix
+  is `@dependabot recreate`, which forces a fresh commit
+  generated against the current master and lets auto-merge
+  re-enable cleanly. This is a sub-case of the BEHIND state —
+  not a new pitfall, but a useful escalation path when the
+  primary rebase command refuses to act.
+- No count change. The new content is an enrichment of the
+  existing Pitfall 7's "Adjacent-line variant" section, plus a
+  concrete one-liner in the worked example.
 
 ---
 
