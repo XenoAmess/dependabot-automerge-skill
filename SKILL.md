@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "PR stuck DIRTY after I rewrote auto-merge.yml", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge", "fetch-metadata refused the commit signature". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "PR stuck DIRTY after I rewrote auto-merge.yml", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "I set MYTOKEN but it's empty inside the auto-merge workflow even though gh secret list shows it", "dependabot PR workflow can't read any custom secrets only GITHUB_TOKEN", "actions secret vs dependabot secret I used gh secret set without --app dependabot", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge", "fetch-metadata refused the commit signature". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -38,6 +38,9 @@ Use this skill when the user says any of:
 - "I have `gh` authenticated but I don't want to create a separate PAT"
 - "the first dependabot PRs are all major version bumps touching workflow files"
 - "MYTOKEN is set but `gh pr review` still errors with empty GH_TOKEN in the log"
+- "I set MYTOKEN but it's empty inside the auto-merge workflow even though `gh secret list` shows it"
+- "dependabot PR workflow can't read any custom secrets, only GITHUB_TOKEN"
+- "actions secret vs dependabot secret — I used `gh secret set` without `--app dependabot`"
 - "two CI workflows produce the same `build (os, java)` check name"
 - "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
 - "dependabot grouped my major upgrades into one huge PR that broke three things at once"
@@ -460,6 +463,21 @@ This is useful when you want to verify `MYTOKEN` scope without waiting for the n
 
 **Device-flow variant (works if the user is present)**: if the smoke test fails and the user can open a browser, run `gh auth refresh -h github.com -s workflow`. The CLI prints a one-time code and a `https://github.com/login/device` URL. After the user completes the device-flow authorization in the browser, the same `gh auth token` value will have the `workflow` scope for workflow-touching PRs. Note: `gh auth status` may continue to list the original scopes (`admin:public_key`, `gist`, `read:org`, `repo`) and omit `workflow` even though the token now works. Trust the smoke test (`gh pr merge <N> --auto --rebase` on an open workflow-touching Dependabot PR), not the scopes list.
 
+**Dependabot-secret gotcha — `--app dependabot` is required, not optional**: This is the single most common reason the above setup "looks right but does nothing". `gh secret set MYTOKEN` (without `--app`) creates an **actions** secret. The actions secret is available to ordinary `on: push` / `on: workflow_dispatch` workflows, but is **NOT** available to the runner when the workflow is triggered by a Dependabot PR — GitHub treats Dependabot PRs as semi-trusted (similar to forks) and refuses to inject any custom secrets other than `GITHUB_TOKEN`. A separate secret namespace exists for Dependabot, set with `--app dependabot`. Symptom: the auto-merge workflow log shows `GH_TOKEN: ` (truly empty — no asterisks, no value) in the env block, the run fails with `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable`, and the debug `echo "${#GH_TOKEN}"` prints `0`. The smoke-test command (`gh pr merge <N> --auto --rebase` from your shell) succeeds because *your* token has the scope — only the workflow run sees the empty value. Fix:
+
+```bash
+TOKEN=$(gh auth token)
+gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"
+```
+
+Verify it landed in the dependabot namespace (default `gh secret list` only lists *actions* secrets and will silently miss it):
+
+```bash
+gh secret list --repo <owner>/<repo> --app dependabot
+```
+
+Then trigger a fresh workflow run (e.g. `gh pr comment <N> --body "@dependabot recreate"` on an open Dependabot PR). The env block in the next run should show `GH_TOKEN: ***` instead of empty, and the auto-merge step will succeed.
+
 ### Pitfall 6 — `allow_auto_merge` is off at the repo level
 
 **Symptom**: `gh pr merge --auto` returns 422 / "Auto merge is not allowed for this repository". The auto-merge workflow succeeds (no error in the step), but the PR's `autoMergeRequest` stays null.
@@ -750,6 +768,43 @@ gh pr diff <N>
 ```
 
 **Why this deserves its own pitfall**: the rewrite is often *the same change* that the optimization skill is making (replace `GITHUB_TOKEN` with `MYTOKEN`, add a `semver-major` branch, drop `actions/checkout@v6`). The bump PR being "stuck at DIRTY" after a successful-looking migration push feels like a separate failure ("rebase is broken"), but it is a direct consequence of the migration push itself. Without this pitfall, the next agent will debug it as a rebase problem and waste cycles on `@dependabot rebase` loops. With it, they recognize the shape immediately and reach for `@dependabot recreate`.
+
+### Pitfall 16 — `gh secret set MYTOKEN` creates an *actions* secret, not a *dependabot* secret
+
+**Symptom**: Auto-merge workflow fails with empty `GH_TOKEN` (and any other custom secret). The env block in the workflow log shows `GH_TOKEN: ` (truly empty, no asterisks, no value), not `GH_TOKEN: ***` (masked). `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable`. Adding debug `echo "${#GH_TOKEN}"` to the step prints `0`. The token is set correctly per `gh secret list` and the smoke test from your local shell (`gh pr merge <N> --auto --rebase`) works fine.
+
+**Cause**: GitHub has two separate secret namespaces per repo: **actions** secrets (default) and **dependabot** secrets. `gh secret set <NAME>` (without `--app`) writes to the *actions* namespace. The runner triggered by a Dependabot PR only receives `GITHUB_TOKEN` — it does **not** receive any *actions* secrets. A *dependabot* secret is required to inject custom tokens into dependabot PR workflows. This was added to the skill because it is the single most common reason a "correctly set up" repo still fails on the very first workflow run, and it is invisible until you actually look at the env block in the run log (which shows empty rather than masked, masking the difference from "secret doesn't exist").
+
+**Fix**: Re-set the secret with `--app dependabot`:
+
+```bash
+TOKEN=$(gh auth token)  # or your PAT
+gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"
+
+# Verify it landed in the dependabot namespace (default list omits it!)
+gh secret list --repo <owner>/<repo> --app dependabot
+```
+
+Then trigger a fresh workflow run on an open dependabot PR:
+
+```bash
+gh pr comment <N> --body "@dependabot recreate"
+```
+
+In the next run's env block, `GH_TOKEN: ***` should now appear (masked = non-empty). The auto-merge step will succeed.
+
+**Diagnostic that distinguishes this from Pitfall 5 (token scope)**:
+
+| Symptom | Cause |
+|---|---|
+| `GH_TOKEN: ***` (masked) in env, step fails with `enablePullRequestAutoMerge GraphQL` | Pitfall 5 — token scope wrong |
+| `GH_TOKEN: ` (truly empty) in env, step fails with `set the GH_TOKEN environment variable` | Pitfall 16 — wrong secret namespace |
+
+The masking indicator (`***` vs empty) is the smoking gun. Look at the env block in `gh run view --log` for the failing step.
+
+**Why this deserves its own pitfall**: the default-`gh secret set` path is so natural that it took the optimization flow all the way through to the smoke test passing before it became apparent that the workflow run saw something different from the local CLI. Without this pitfall, the next agent will re-run `gh secret set MYTOKEN --body "$TOKEN"` three or four times, conclude it must be a value-length or whitespace issue, and burn an hour before checking `--app`. With it, the fix is the first thing to try when the env block shows empty rather than masked. The remediation is one flag; the diagnostic is two characters in the run log (`***` vs ``).
+
+**Adjacent trap — `gh secret list` only shows actions secrets by default**: this is what makes the bug invisible. `gh secret list` returns `[{"name":"DEBUG_KEYSTORE_BASE64",...}, {"name":"MYTOKEN",...}]` whether the secret is in the actions namespace (invisible to dependabot) or the dependabot namespace (visible to dependabot). Always pass `--app dependabot` when verifying dependabot-secret setup.
 
 ---
 
@@ -1568,3 +1623,5 @@ gh pr view <N> --json autoMergeRequest --jq '.autoMergeRequest.enabledBy.login'
 - "The first dependabot PRs are all major version bumps touching workflow files and the first one failed" → this is the worst-case test path. Re-check Pre-flight 5 (token scope), Verification check #8/#11, and Pitfall 5. The "first batch is hardest" snag explains why.
 - "A dependabot PR is stuck at `DIRTY` after I rewrote `auto-merge.yml` (not after a sibling PR merged)" → Pitfall 15. Your rewrite deleted or moved a line the PR was trying to change. Comment `@dependabot recreate` on the PR; the regenerated diff will skip the deleted step.
 - "I amended a dependabot commit and the auto-merge workflow now silently no-ops" → Pitfall 10 protocol-level enforcement. `dependabot/fetch-metadata` verifies the commit's git signature, which amend always breaks. Use `@dependabot recreate` instead; do not amend.
+- "MYTOKEN is set but the workflow sees an empty value (env shows `GH_TOKEN: `, not `***`)" → Pitfall 16. `gh secret set` without `--app dependabot` writes to the wrong namespace. Re-set with `--app dependabot` and verify with `gh secret list --app dependabot`.
+- "I set MYTOKEN via `gh secret set` but `gh secret list` shows it yet the workflow sees empty" → Pitfall 16. Default `gh secret list` only shows the actions namespace; the secret landed there, where dependabot PR workflows cannot read it. Re-set with `--app dependabot`.
