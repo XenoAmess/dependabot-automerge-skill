@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -56,6 +56,12 @@ Do **not** use this skill for:
 
 Before changing anything, gather context. Do not skip these.
 
+> **Default branch**: this skill uses `master` as a shorthand example. Discover the repo's actual default branch (`develop`, `main`, etc.) and substitute it for every `master` reference below.
+>
+> ```bash
+> gh api repos/<owner>/<repo> --jq '.default_branch'
+> ```
+
 1. **Read the current state**:
    - `.github/dependabot.yml` — which ecosystems are configured? schedule? PR limit? groups? labels?
    - `.github/workflows/` — is there already an `auto-merge.yml`? what is its `if:` line?
@@ -63,6 +69,7 @@ Before changing anything, gather context. Do not skip these.
 2. **Check the GitHub repo** (use `gh` CLI; the user must be authenticated):
    ```bash
    gh auth status
+   gh api repos/<owner>/<repo> --jq '.default_branch'
    gh api repos/<owner>/<repo>/branches/master/protection
    gh api repos/<owner>/<repo> --jq '.allow_auto_merge'   # see Pitfall 6
    ```
@@ -1118,9 +1125,43 @@ this revision):
 - No count change. Pitfalls remain at fourteen; verification checks
   remain at fourteen.
 
+After optimizing `XenoAmess/metasploit-java-external-module` (the run that
+produced this revision):
+
+- **Default branch gap closed.** The repo uses `develop`, not `master`. All
+  `master` references in the recipe had to be adapted: branch protection,
+  `dependabot.yml` `target-branch`, and `build.yml` `push: branches:`. Added
+  a pre-flight note to discover `.default_branch` first and substitute it
+  everywhere.
+- **Maven submodule redundancy observed.** A separate `package-ecosystem:
+  maven` entry for `/src/core` was added initially, then removed after
+  discovering that the root `/` Maven aggregator already recurses into
+  submodules and creates PRs like `dependabot/maven/src/core/...`. The
+  duplicate entry produced redundant PRs and had to be cleaned up. Promoted
+  to a Snag: "Maven aggregator projects: do not add separate ... entries
+  for submodules."
+- **Pitfall 11 confirmed in the wild:** the repo used
+  `ahmadnassri/action-dependabot-auto-merge@v2` with a lowercase `mytoken`
+  secret name while the actual secret was `MYTOKEN`. The wrapper reported
+  green `success` while doing nothing. Replacing it with explicit `gh pr
+  review --approve` + `gh pr merge --auto --rebase` steps immediately
+  surfaced the real state and started merging eligible PRs.
+- **Pitfall 2 subtle variant confirmed:** `build.yml` had only `on: [push]`.
+  CI appeared on PRs because Dependabot pushes on rebase, but there was no
+  real `pull_request` gate. Changing to `push: branches: [develop]` +
+  `pull_request:` fixed the gating.
+- **User OAuth token shortcut verified again.** `gh auth token` (prefix
+  `gho_`) was stored as `MYTOKEN`; the first workflow-touching PR
+  (`actions/checkout` 6→7) enabled auto-merge and merged via rebase once CI
+  passed. No separate PAT was needed.
+- Counts unchanged: still fourteen pitfalls, fourteen verification checks.
+  The changes are pre-flight / snag enrichment, not new failure modes.
+
 ---
 
 ## Snags to watch for
+
+- **Maven aggregator projects: do not add separate `package-ecosystem: maven` entries for submodules.** If the root `pom.xml` declares the submodules in `<modules>`, a single Dependabot Maven entry at `/` already recurses into them and opens PRs like `dependabot/maven/src/core/...` for dependencies defined in submodule `pom.xml` files. Adding extra entries (e.g. `directory: "/src/core"`) produces duplicate PRs for the same bumps and makes the backlog harder to drain. Keep one root Maven entry and let Dependabot discover the submodule updates.
 
 - **`enforce_admins: false` does not apply to Dependabot**: Dependabot opens PRs as itself, so the admin bypass does not affect it. Good — the protection will still gate Dependabot.
 - **`@dependabot recreate` resets the PR**: if you find a PR that has been force-pushed mid-flight, give it a minute. The auto-merge workflow re-runs on `pull_request` events.
@@ -1190,9 +1231,14 @@ this revision):
 
 ## Quick reference — all `gh` commands used in this skill
 
+> Replace `master` below with the repo's actual default branch (`gh api repos/<owner>/<repo> --jq '.default_branch'`).
+
 ```bash
 # Auth check
 gh auth status
+
+# Default branch discovery
+gh api repos/<owner>/<repo> --jq '.default_branch'
 
 # allow_auto_merge (Step 3)
 gh api repos/<owner>/<repo> --jq '.allow_auto_merge'

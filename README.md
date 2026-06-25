@@ -20,6 +20,7 @@ When triggered, the skill:
 It activates on phrases like:
 
 - "set up dependabot auto-merge"
+- "optimize dependabot"
 - "PR stuck waiting for checks"
 - "auto-merge skipped CI"
 - "branch protection required status check"
