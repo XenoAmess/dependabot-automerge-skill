@@ -1,6 +1,6 @@
 # dependabot-automerge-skill
 
-An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the ten "Pitfalls" sections are the things that have actually broken in production. The skill is self-improving: after every successful run, it writes a per-project notes file and updates itself with what it learned.
+An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the twelve "Pitfalls" sections are the things that have actually broken in production. The skill is self-improving: after every successful run, it writes a per-project notes file and updates itself with what it learned.
 
 ## What it does
 
@@ -12,7 +12,7 @@ When triggered, the skill:
 4. Enables `allow_auto_merge` at the repo level.
 5. Sets branch protection with the **actual** required check name(s) — discovered from GraphQL, not guessed.
 6. Hardens `dependabot.yml` (weekly schedule, grouped updates, sensible PR limit, labels) so the user doesn't drown in noise.
-7. Verifies the setup against eleven concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode and a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern.
+7. Verifies the setup against twelve concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode, an empty-`MYTOKEN` detection diagnostic for the silent-failure case, a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern, and a duplicate-check-name detection diagnostic for repos with split CI workflows.
 8. **Self-improvement**: writes `<project>/docs/dependabot-optimization-notes.md` and updates this skill with anything new it learned. Both are required deliverables, not optional polish.
 
 ## When the skill triggers
@@ -38,6 +38,9 @@ It activates on phrases like:
 - "I have `gh` but I don't want to create a separate PAT"
 - "rebase produced a real conflict not just BEHIND"
 - "first batch of dependabot PRs are all major version bumps touching workflow files"
+- "MYTOKEN is set but auto-merge still fails with empty GH_TOKEN"
+- "two CI workflows produce the same `build (os, java)` check name"
+- "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
@@ -58,7 +61,7 @@ Restart opencode after adding the path. Then ask opencode to set up auto-merge f
 
 ## Self-improving
 
-The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`).
+The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`).
 
 ## Layout
 
@@ -72,7 +75,7 @@ The skill itself is a single `SKILL.md` file. opencode scans for `**/SKILL.md` i
 
 ## Why a single file?
 
-opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the eleven pitfalls, and the eleven-item verification checklist in one place, with no extra navigation.
+opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the twelve pitfalls, and the twelve-item verification checklist in one place, with no extra navigation.
 
 ## License
 

@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -36,6 +36,9 @@ Use this skill when the user says any of:
 - "dependabot PR went DIRTY (not BEHIND) after a sibling PR merged"
 - "I have `gh` authenticated but I don't want to create a separate PAT"
 - "the first dependabot PRs are all major version bumps touching workflow files"
+- "MYTOKEN is set but `gh pr review` still errors with empty GH_TOKEN in the log"
+- "two CI workflows produce the same `build (os, java)` check name"
+- "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
 
 Do **not** use this skill for:
 
@@ -352,7 +355,7 @@ Why this works:
 
 ### Step 7 — Self-improvement (mandatory, not optional)
 
-After all eleven Verification checks pass, before reporting success:
+After all twelve Verification checks pass, before reporting success:
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
 2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
@@ -426,6 +429,8 @@ If you see zero `pull_request` rows among the last 20 runs, your CI is not runni
 **Fix**: Use a repo PAT with `repo` + `workflow` scope for the `gh pr review` and `gh pr merge` steps. `fetch-metadata` is read-only and can keep using `GITHUB_TOKEN`. Configure via `gh secret set MYTOKEN` (use whatever name you want; remember the case).
 
 **Diagnostic**: If you're not sure which token the action is using, check the secret name. `${{ secrets.mytoken }}` (lowercase) and `${{ secrets.MYTOKEN }}` (uppercase) are different secrets — names are case-sensitive. An undefined secret silently falls back to `GITHUB_TOKEN` and produces this exact error.
+
+**Empty-secret detection in the workflow log**: when the secret exists in the repo's secret list but holds no value, the workflow log shows `GH_TOKEN: ` (truly empty — colon followed by nothing), not `GH_TOKEN: ***` (masked). The trailing colon with no asterisks is the giveaway. The `gh pr review` step then errors with `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable`. Fix: `gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"`. To inspect, run `gh run view <id> --log-failed` and look at the env block of the failing step.
 
 **Shortcut — user OAuth token, no separate PAT needed**: If the user invoking this skill is the repo admin and already has `gh` authenticated, you do not need a separate PAT. A user OAuth token (`gho_*` prefix) has implicit `workflow` scope for repos where the user is admin — it can approve and enable auto-merge on PRs that modify workflow files. Use it directly:
 
@@ -612,11 +617,38 @@ Both steps have a single command; if either returns non-zero (including 422), th
 
 **Why this deserves its own pitfall**: the wrapper action is the most-clicked result when you search "github action dependabot auto-merge", and it has a fundamental design flaw (swallowed errors with green exit code) that hides the most common failure mode. Anyone inheriting an existing `auto-merge.yml` that uses this action is likely in the "green run, no merge" state right now and does not know it.
 
+### Pitfall 12 — Two workflows with the same job name + matrix produce the same check name
+
+**Symptom**: A repo has two CI workflows (e.g. a fast `build.yml` and a more thorough `build_idea_plugin.yml` for the IDE plugins). The PR's Checks tab shows the matrix checks appearing **twice each** — `build (ubuntu-latest, 21, false)` once from each workflow, `build (windows-latest, 21, false)` once from each. Branch protection is set to require `build (ubuntu-latest, 21, false)`, and GitHub accepts the requirement, but you cannot tell which workflow's check satisfied it. If one workflow passes and the other fails, the required-check logic is ambiguous.
+
+**Cause**: The GitHub Actions check name format is `<job-name> (<matrix-axes>)` — **the workflow name is NOT part of it.** Two workflows with the same `name:` field, a job called `build` with the same matrix axes, will produce identical check names. Renaming the workflow's `name:` does not help; the job name has to differ.
+
+**Diagnostic**: query the check rollup on any open PR. If you see the same `name` listed twice with different workflow IDs, this pitfall applies:
+
+```bash
+gh api graphql -F query='
+query {
+  repository(owner: "<owner>", name: "<repo>") {
+    pullRequest(number: <N>) {
+      statusCheckRollup {
+        contexts(first: 20) {
+          nodes { ... on CheckRun { name databaseId } }
+        }
+      }
+    }
+  }
+}'
+```
+
+**Fix**: rename the job in one of the workflows so the check names become distinct. Example: keep the main workflow's job as `build` and rename the plugin workflow's job to `plugins-build`. The check name will then be `plugins-build (ubuntu-latest, 21, false)`, and branch protection can require both `build (ubuntu-latest, 21, false)` and `plugins-build (ubuntu-latest, 21, false)` independently. Both must pass for the PR to merge; if either fails, the merge blocks with a clear attribution.
+
+**Why this deserves its own pitfall**: this is a real hazard for any repo that has split its CI into "fast main build" and "thorough extra build" workflows — a very common shape, especially for monorepos with sub-projects. Branch protection silently accepts the duplicate name, so the misconfiguration is invisible until you actually need to debug a CI failure and find the wrong check satisfied the gate.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all eleven checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
+Do not tell the user "done" until all twelve checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -629,6 +661,7 @@ Do not tell the user "done" until all eleven checks pass. After that, do not rep
 9. **Auto-merge workflow actually runs on Dependabot PRs**: in the Actions tab, filter by `auto-merge.yml` and confirm there is at least one run per recent open Dependabot PR (not zero). If the count is zero across all open PRs, Pitfall 8 (login mismatch) is the cause.
 10. **CI is triggered by `pull_request` events, not just `push`**: `gh run list --workflow="<build workflow>" --limit 20 --json event --jq '.[].event'` should show a healthy mix including `pull_request`. If every row says `push`, the `on:` block is wrong (Pitfall 2 subtle variant — CI "looks like it works" because Dependabot pushes on rebase).
 11. **`MYTOKEN` has the required scope (no separate PAT needed if you took the user-OAuth-token path)**: `gh pr merge <N> --auto --rebase` on any open workflow-touching Dependabot PR sets `autoMergeRequest.enabledBy` to a real login (not null, not `web-flow`). This proves the secret has the implicit `workflow` scope. If you took the separate-PAT path, this is covered by check 8.
+12. **No duplicate check names across multiple CI workflows**: GraphQL query on the check rollup of any open PR should show each `<job> (<matrix>)` exactly once. If the same name appears twice (different `databaseId`), Pitfall 12 applies — branch protection's "required" gate is ambiguous, and a failure in one workflow can be masked by a success in the other. Also: when running `gh secret set MYTOKEN`, verify the secret actually has a value (not an empty string); an empty secret shows as `GH_TOKEN: ` (colon with no value) in the workflow log, not as `GH_TOKEN: ***` (Pitfall 5 empty-secret diagnostic).
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -637,7 +670,7 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all eleven checks pass), audit what you actually learned during
+(all twelve checks pass), audit what you actually learned during
 **this** run and update this file before finishing the conversation.
 This is not optional polish — it is part of the deliverable. **Step 7**
 of Implementation makes this a required step, not a recommended one.
@@ -675,7 +708,7 @@ Use this template (adapt the sections; do not omit any):
 <numbered list, each linking to the relevant Pitfall / Snag / Verification change>
 
 ## Verification results
-<table of 11 checks, with actual results>
+<table of 12 checks, with actual results>
 ```
 
 After writing the per-project notes, perform the skill update as
@@ -716,8 +749,8 @@ Do **not** update the skill when:
 
 1. Make the **minimum surgical edit** that captures the lesson. Do not
    rewrite sections that still apply; append or insert.
-2. Update affected counts (e.g. "nine pitfalls" → "ten pitfalls",
-   "ten verification checks" → "eleven"). Grep for the old count first
+2. Update affected counts (e.g. "eleven pitfalls" → "twelve pitfalls",
+   "twelve verification checks" → "thirteen"). Grep for the old count first
    to catch every reference.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
@@ -846,6 +879,37 @@ the latest revision):
 One commit, ~140 insertions, no rewrite. This is the expected shape of
 an update: targeted edits, counts grepped, README synced, single commit.
 
+After optimizing `XenoAmess/evosuite` (the run that produced this
+revision):
+
+- **Pitfall 12 added**: two workflows with the same job name and matrix
+  produce the same check name (`<job-name> (<matrix-axes>)`, not
+  `<workflow> / <job>`). Symptom is a PR Checks tab showing the matrix
+  rows duplicated, and branch protection's "required" gate is
+  ambiguous — one workflow's failure can be masked by the other's
+  success. Fix: rename the job in one workflow. Common in monorepos
+  with split fast/thorough CI; the misconfiguration is invisible until
+  you actually need to debug a CI failure.
+- **Diagnostic added to Pitfall 5**: when the repo secret (`MYTOKEN`)
+  is registered but holds no value, the workflow log shows
+  `GH_TOKEN: ` (colon with nothing after) instead of `GH_TOKEN: ***`
+  (masked). The error message is `gh: To use GitHub CLI in a GitHub
+  Actions workflow, set the GH_TOKEN environment variable`. Fix:
+  `gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"`. The
+  empty value is a one-line root cause but very easy to miss — `gh secret
+  list` shows the secret, so the existence check passes; only the
+  log-failed inspection catches the empty value.
+- **Three new snags**: `update-branch` API returns 422 when master is
+  unchanged (use close+reopen as the fallback); `include: "scope"` +
+  `prefix: "build(deps)"` collides into `build(deps)(deps): ...`
+  (drop the include); check name format reminder (`<job> (<matrix>)`,
+  not `<workflow> / <job>`).
+- **Counts bumped**: eleven → twelve pitfalls, eleven → twelve
+  verification checks. New trigger phrases ("MYTOKEN is set but auto-merge
+  still fails with empty GH_TOKEN", "two workflows produce the same
+  check name", "dependabot titles look like build(deps)(deps)") added
+  to description and When-to-use.
+
 ---
 
 ## Snags to watch for
@@ -901,6 +965,12 @@ an update: targeted edits, counts grepped, README synced, single commit.
 - **`gh auth refresh -s workflow` hangs in non-interactive CLI sessions.** If you try to add the `workflow` scope to an existing OAuth token from a non-interactive session, the command blocks waiting for a browser confirmation. It will not time out on its own; you have to Ctrl-C it. Either take the user-OAuth-token shortcut (Pitfall 5) and use the token as-is, or ask the user to add the scope via the web UI at `Settings → Developer settings → Personal access tokens → [token] → Edit scopes → Workflow ✓`. Do not retry the refresh in a loop.
 
 - **User OAuth token login normalization is undocumented and may change.** Even when `gh pr list --json author` shows `app/dependabot` for a PR opened by the new Dependabot GitHub App, the value of `github.event.pull_request.user.login` inside the workflow run is normalized to `dependabot[bot]`. This means a workflow gated on the legacy form will silently work on a fully migrated repo. The match-both `||` form (Pitfall 8) is still the right defense — the normalization is undocumented behavior and could be removed in a future GitHub update.
+
+- **`update-branch` API returns 422 when master hasn't moved.** `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch` only rebases if the base branch has a new commit. If the PR is in the "old auto-merge workflow" state and you want to force a re-evaluation without a rebase, use `gh pr close <N> --delete-branch=false && gh pr reopen <N>` instead — that re-fires the `pull_request: reopened` event with no base-branch motion required. Useful right after you set `MYTOKEN` to a valid value and need the workflow to retry the approve+merge steps that previously failed for the empty-secret reason.
+
+- **`include: "scope"` + `prefix:` collides into `build(deps)(deps): ...`.** When the conventional-commits-style prefix already contains a scope (`build(deps)`, `chore(deps)`, `feat(api)`) and `dependabot.yml` also has `include: "scope"`, the package-manager scope (`deps` for maven, `github-actions` for the github-actions ecosystem) is appended to the prefix, producing a doubled scope. Drop `include: "scope"` from the dependabot config; the package name in the commit body is enough disambiguation.
+
+- **Check name format is `<job-name> (<matrix-axes>)`, not `<workflow> / <job>`.** A common source of duplicate check names when two workflows (`build.yml` and `build_extra.yml`, say) both define a job called `build` with the same matrix. Renaming `name:` on the workflow does not help; the job ID has to differ. See Pitfall 12 for the full pattern and fix.
 
 ---
 
