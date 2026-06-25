@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, or wants to reduce manual PR churn. Triggers on phrases like "set up dependabot auto-merge", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -39,6 +39,10 @@ Use this skill when the user says any of:
 - "MYTOKEN is set but `gh pr review` still errors with empty GH_TOKEN in the log"
 - "two CI workflows produce the same `build (os, java)` check name"
 - "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
+- "dependabot grouped my major upgrades into one huge PR that broke three things at once"
+- "patterns: `[\"*\"]` in my dependabot.yml groups everything into a single PR"
+- "drop the `groups:` block from dependabot.yml"
+- "one PR per dependency please, not one PR per ecosystem"
 
 Do **not** use this skill for:
 
@@ -290,12 +294,13 @@ SSH uses your local SSH key and is not subject to the `workflow` OAuth scope res
 
 ### Step 6 — `dependabot.yml` (do this, not optional)
 
-Auto-merge works without touching `dependabot.yml`, but the user will still drown in noise unless you also do these four things. Each one collapses PR count or clarifies intent:
+Auto-merge works without touching `dependabot.yml`, but the user will still drown in noise unless you also do these three things. Each one collapses PR *churn* or clarifies intent:
 
 1. **Weekly schedule, not daily.** `interval: daily` produces a PR per bump per day; `weekly` produces one batched bump on a predictable day.
 2. **`open-pull-requests-limit` of 5–20.** Default is 5. `100` is a foot-gun — see Snags.
-3. **Groups** so N updates → 1 PR instead of N PRs. This also avoids the Pitfall 7 BEHIND race almost entirely.
-4. **`commit-message.prefix` and `labels`** so the auto-merge workflow (and humans) can identify dependabot PRs at a glance.
+3. **`commit-message.prefix` and `labels`** so the auto-merge workflow (and humans) can identify dependabot PRs at a glance.
+
+**Do not** add a `groups:` block. Grouping — particularly `patterns: ["*"]` — collapses N unrelated dependency bumps into a single multi-hundred-line PR. When that PR fails CI, you cannot tell which bump caused it; when it passes, the diff is too large to review in one sitting. Major-version PRs in particular become unreviewable — the auto-merge policy in Step 1 says "do not auto-merge major", so the giant PR sits open until a human can pick it apart. The default behaviour (one PR per dependency per cycle) keeps each diff small enough to read, bisect and revert in isolation, at the cost of a higher PR count. That trade-off is the right one. See Pitfall 13.
 
 Concrete recipe (adapt `directory`, `target-branch`, and ecosystem-specific bits):
 
@@ -314,19 +319,9 @@ updates:
     commit-message:
       prefix: "build(deps)"
       prefix-development: "build(deps-dev)"
-      include: "scope"
     labels:
       - "dependencies"
       - "java"
-    groups:
-      maven-minor-and-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-      maven-major:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -338,26 +333,22 @@ updates:
     target-branch: "master"
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "build(deps)"
-      include: "scope"
+      prefix: "ci"
     labels:
       - "dependencies"
       - "github-actions"
-    groups:
-      github-actions:
-        applies-to: version-updates
-        patterns: ["*"]
 ```
 
 Why this works:
 
-- **Two maven groups** let you keep your auto-merge policy table simple — one PR per group per cycle, and your policy can match the group name instead of the per-PR `update-type` if you want.
-- **`applies-to: version-updates`** scopes groups to version bumps only — security updates stay in their own PRs (you usually want those reviewed individually).
+- **No `groups:` block** means one PR per dependency per cycle. Each PR is one bump, one diff, one review. The `prefix:` + `labels` keep the stream scannable so the higher PR count is not a navigation problem.
+- **`include: "scope"` is omitted** — it collides with `prefix:` to produce `build(deps)(deps): ...` (see Snags below).
 - **Same `day: monday` for all ecosystems** means the user sees one batch of dependabot activity per week, not a constant drip.
+- **For per-PR auto-merge policy**, the auto-merge workflow's existing `update-type` check (Step 1) reads the bump's `semver-*` classification directly from dependabot's metadata — that already works correctly without `groups:`.
 
 ### Step 7 — Self-improvement (mandatory, not optional)
 
-After all twelve Verification checks pass, before reporting success:
+After all thirteen Verification checks pass, before reporting success:
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
 2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
@@ -653,11 +644,21 @@ query {
 
 **Why this deserves its own pitfall**: this is a real hazard for any repo that has split its CI into "fast main build" and "thorough extra build" workflows — a very common shape, especially for monorepos with sub-projects. Branch protection silently accepts the duplicate name, so the misconfiguration is invisible until you actually need to debug a CI failure and find the wrong check satisfied the gate.
 
+### Pitfall 13 — `groups:` with `patterns: ["*"]` bundles every upgrade in that ecosystem into one PR
+
+**Symptom**: The next weekly dependabot cycle opens a single PR titled something like `build(deps): bump the maven-major group with 3 updates`, and that PR contains three completely unrelated dependency upgrades (e.g. `maven-release-plugin 2.5.3→3.3.1`, `maven-surefire-plugin 2.22.2→3.5.6`, `jaxb2-maven-plugin 1.6→2.5.0`). When the CI fails, the failure log is huge and you cannot tell which of the three bumps caused it; when CI passes, the diff is too large to review in one sitting. Major-version PRs in particular are unreviewable: the policy in Step 1 says "do not auto-merge major", so the PR is left for a human, and the human is asked to review a diff that spans three plugins and their configs.
+
+**Cause**: The `groups:` block in `dependabot.yml` uses `patterns: ["*"]` to mean "match every dependency in this ecosystem". Combined with `update-types: ["major"]` (or `["minor", "patch"]`), it tells dependabot to open **one PR per group, per cycle**, containing every available upgrade. The previous version of this skill (Step 6) explicitly recommended this pattern, on the rationale that "N updates → 1 PR" reduces noise. In practice it just moves the noise from "many small PRs" to "one giant PR", and makes failures un-attributable.
+
+**Fix**: drop the `groups:` block entirely from every ecosystem entry. With no `groups:`, dependabot falls back to its default behaviour: one PR per dependency per cycle. The per-ecosystem `commit-message.prefix` and `labels` still make the PR stream scannable; the PR *count* goes up but each PR's *diff* stays small enough to read, bisect and revert in isolation. See the corrected Step 6 recipe for the exact shape.
+
+**Why this deserves its own pitfall**: the previous recipe in this skill is what produced PRs of this shape. Anyone who followed it is sitting on a backlog of giant grouped PRs that are hard to review and hard to debug. The recipe looked like a free win (collapse N PRs into 1), but the failure mode (a 3-bump PR that breaks three things at once) is the exact opposite of what dependabot is supposed to provide. If you already have `groups:` with `patterns: ["*"]` in your config, drop them on the next push — the next cycle will reopen the individual PRs, each with the right `update-type` so the auto-merge policy picks them up correctly.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all twelve checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
+Do not tell the user "done" until all thirteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -671,6 +672,7 @@ Do not tell the user "done" until all twelve checks pass. After that, do not rep
 10. **CI is triggered by `pull_request` events, not just `push`**: `gh run list --workflow="<build workflow>" --limit 20 --json event --jq '.[].event'` should show a healthy mix including `pull_request`. If every row says `push`, the `on:` block is wrong (Pitfall 2 subtle variant — CI "looks like it works" because Dependabot pushes on rebase).
 11. **`MYTOKEN` has the required scope (no separate PAT needed if you took the user-OAuth-token path)**: `gh pr merge <N> --auto --rebase` on any open workflow-touching Dependabot PR sets `autoMergeRequest.enabledBy` to a real login (not null, not `web-flow`). This proves the secret has the implicit `workflow` scope. If you took the separate-PAT path, this is covered by check 8.
 12. **No duplicate check names across multiple CI workflows**: GraphQL query on the check rollup of any open PR should show each `<job> (<matrix>)` exactly once. If the same name appears twice (different `databaseId`), Pitfall 12 applies — branch protection's "required" gate is ambiguous, and a failure in one workflow can be masked by a success in the other. Also: when running `gh secret set MYTOKEN`, verify the secret actually has a value (not an empty string); an empty secret shows as `GH_TOKEN: ` (colon with no value) in the workflow log, not as `GH_TOKEN: ***` (Pitfall 5 empty-secret diagnostic).
+13. **No `groups:` with `patterns: ["*"]` in `dependabot.yml`**: `cat .github/dependabot.yml` should not contain `patterns: ["*"]` anywhere. If it does, Pitfall 13 applies — the next weekly cycle will open a single multi-dependency PR, and any failure in that PR is un-attributable to a specific bump. Drop the `groups:` block on the next push; the next cycle will reopen the individual PRs, each tagged with the right `update-type` so the auto-merge policy picks them up correctly. One PR per dependency per cycle is the right shape.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -679,7 +681,7 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all twelve checks pass), audit what you actually learned during
+(all thirteen checks pass), audit what you actually learned during
 **this** run and update this file before finishing the conversation.
 This is not optional polish — it is part of the deliverable. **Step 7**
 of Implementation makes this a required step, not a recommended one.
@@ -760,7 +762,8 @@ Do **not** update the skill when:
    rewrite sections that still apply; append or insert.
 2. Update affected counts (e.g. "eleven pitfalls" → "twelve pitfalls",
    "twelve verification checks" → "thirteen"). Grep for the old count first
-   to catch every reference.
+   to catch every reference. The current target is thirteen pitfalls and
+   thirteen verification checks.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
    referenced from Pre-flight and Verification must actually exist.
@@ -953,6 +956,64 @@ this revision):
 
 One commit, ~12 insertions (one snag + a worked-example entry), no rewrite.
 
+After the follow-up that produced this revision (re-applying the
+skill to `XenoAmess/evosuite` after a `dependabot/maven-major`
+PR exposed a long chain of latent issues):
+
+- **Pitfall 13 added**: `groups:` with `patterns: ["*"]` in
+  `dependabot.yml` is an anti-pattern, not a feature. Symptom: the
+  next weekly cycle opens a single PR containing every available
+  major (or minor/patch) upgrade in the ecosystem, and any CI
+  failure inside it is un-attributable to a specific bump. Cause:
+  the `patterns: ["*"]` matches every dependency in the ecosystem,
+  so the `groups:` block is equivalent to "one PR per ecosystem
+  per cycle" rather than the implicit "one PR per dependency per
+  cycle". The previous version of this skill's Step 6 explicitly
+  recommended this pattern, on the rationale that "N updates → 1
+  PR" reduces noise. In practice the noise just relocates from
+  the PR list to the diff of one PR. Fix: drop the `groups:` block
+  entirely; one PR per dependency per cycle is the right shape.
+- **Step 6 rewritten** to drop the `groups:` recipe. The new
+  recipe has the same weekly schedule, PR limit, prefix, labels,
+  and per-ecosystem entries, just without the `groups:` block.
+  Per-PR auto-merge policy still works because the auto-merge
+  workflow's `update-type` check reads the bump's `semver-*`
+  classification from dependabot's metadata directly — no group
+  name required.
+- **Verification check 13 added**: `cat .github/dependabot.yml`
+  must not contain `patterns: ["*"]` anywhere. The grep is
+  literal: that string is the unique signature of the
+  anti-pattern. (Snag form for runtime: drop the `groups:`
+  block on the next push; the cycle after that reopens the
+  individual PRs.)
+- **Snag added** restating Pitfall 13 in a runtime checklist
+  form: "if you find a `groups:` block in an inherited config,
+  drop it on the next push and let the next cycle reopen the
+  individual PRs". Also clarifies the existing `Grouping in
+  dependabot.yml closes the old individual PRs` snag — the
+  closure is the *good* half (it forces the next cycle to
+  re-evaluate), but any future cycle will repeat the bundling,
+  so the new Snag recommends also dropping the `groups:`.
+- **Description and When-to-use list extended** with three new
+  trigger phrases: "dependabot grouped my major upgrades into
+  one huge PR that broke three things at once",
+  `patterns: ["*"]` in my dependabot.yml groups everything into
+  a single PR`, and "drop the `groups:` block from
+  dependabot.yml". The user-facing symptom of this pitfall
+  ("one huge PR that broke three things at once") is the
+  exact phrasing someone is most likely to type at you.
+- **Counts bumped**: twelve → thirteen pitfalls, twelve →
+  thirteen verification checks. The "twelve pitfalls" and
+  "twelve-item verification checklist" references in README.md
+  were also bumped to "thirteen".
+
+One commit, ~85 insertions (one new pitfall, one verification
+check, one snag, one Step-6 rewrite, one worked-example entry,
+trigger-phrase bumps in two places), no rewrite of the
+unaffected sections. The previous count was twelve pitfalls /
+twelve verification; grepping the file for "twelve" before
+editing caught the README references that needed bumping.
+
 ---
 
 ## Snags to watch for
@@ -1001,7 +1062,9 @@ One commit, ~12 insertions (one snag + a worked-example entry), no rewrite.
 
 - **Adding `groups:` to `dependabot.yml` immediately closes the original per-dependency PRs as superseded.** This is a free way to drain a backlog of N individual PRs into 1 (or a few) grouped PRs. The new grouped PR(s) then proceed through the normal auto-merge path; the original PRs close themselves. Caveat: the close happens the moment the new grouped PR is opened, which is *before* the grouped PR is merged. If for any reason the grouped PR is then closed without merging (e.g. a CI failure or a maintainer close), the individual PRs do not reopen — you have to wait for the next weekly cycle to regenerate them. For low-risk projects this is a clean win; for repos where individual PRs are deliberately being reviewed out-of-band, do not add `groups:` without first merging or closing the existing ones.
 
-- **Grouping in dependabot.yml closes the old individual PRs.** When you add a `groups:` block to an ecosystem that already has individual PRs open, Dependabot on the next cycle closes those individual PRs and opens a single grouped PR with a title like `chore(deps): bump the major group with 2 updates`. This is expected — the old PRs show up as `CLOSED` (not merged), the new grouped PR inherits their changes, and `update-type` for the grouped PR reports the highest-severity bump in the group. Don't panic if your "verified working" PRs vanish from the open list; the replacement is the grouped PR.
+- **Grouping in dependabot.yml closes the old individual PRs.** When you add a `groups:` block to an ecosystem that already has individual PRs open, Dependabot on the next cycle closes those individual PRs and opens a single grouped PR with a title like `chore(deps): bump the major group with 2 updates`. This is expected — the old PRs show up as `CLOSED` (not merged), the new grouped PR inherits their changes, and `update-type` for the grouped PR reports the highest-severity bump in the group. Don't panic if your "verified working" PRs vanish from the open list; the replacement is the grouped PR. **But see Pitfall 13: do not keep grouping in the config long-term.** The closure is the "good" half — it forces the next cycle to re-evaluate. The bad half is that any future cycle will repeat the bundling.
+
+- **`patterns: ["*"]` in `dependabot.yml` `groups:` is anti-pattern, not a feature.** The `groups:` block is meant to *narrow* a PR set ("only these artifacts go in this group"). Using `patterns: ["*"]` as the pattern means "every artifact in this ecosystem", which is the same as having no `groups:` at all except for the side effect of merging N PRs into 1. The previous version of this skill (Step 6) recommended exactly this pattern, on the rationale that "N updates → 1 PR reduces noise". In practice the noise just relocates from the PR list to the diff of one PR, and CI failures become un-attributable. A 3-bump grouped PR where one bump is the culprit and the other two are innocent: you cannot tell which is which from the CI log. A 3-PR stream with one failing: the failing PR's title and CI log make the culprit obvious. Pitfall 13 is the formal version of this lesson; the Snag form is "if you find a `groups:` block in an inherited config, drop it on the next push and let the next cycle reopen the individual PRs".
 
 - **`AdoptOpenJDK` distribution is being phased out.** `actions/setup-java` with `distribution: adopt` now emits an annotation warning that AdoptOpenJDK has moved to Eclipse Temurin. Recommended: change to `distribution: temurin` in the CI workflow. Non-blocking but visible in the Actions tab.
 
