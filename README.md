@@ -1,6 +1,6 @@
 # dependabot-automerge-skill
 
-An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the fourteen "Pitfalls" sections are the things that have actually broken in production. The skill is self-improving: after every successful run, it writes a per-project notes file and updates itself with what it learned.
+An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the fifteen "Pitfalls" sections are the things that have actually broken in production. The skill is self-improving: after every successful run, it writes a per-project notes file and updates itself with what it learned.
 
 ## What it does
 
@@ -12,7 +12,7 @@ When triggered, the skill:
 4. Enables `allow_auto_merge` at the repo level.
 5. Sets branch protection with the **actual** required check name(s) — discovered from GraphQL, not guessed.
 6. Hardens `dependabot.yml` (weekly schedule, grouped updates, sensible PR limit, labels) so the user doesn't drown in noise.
-7. Verifies the setup against fourteen concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode, an empty-`MYTOKEN` detection diagnostic for the silent-failure case, a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern, a duplicate-check-name detection diagnostic for repos with split CI workflows, a `grep -F 'patterns: ["*"]' .github/dependabot.yml` line that catches the "one giant grouped PR is hard to debug" anti-pattern, and a `@dependabot rebase` smoke test that catches the "I pushed a fix but my existing PRs are still stuck" trap.
+7. Verifies the setup against fifteen concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode, an empty-`MYTOKEN` detection diagnostic for the silent-failure case, a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern, a duplicate-check-name detection diagnostic for repos with split CI workflows, a `grep -F 'patterns: ["*"]' .github/dependabot.yml` line that catches the "one giant grouped PR is hard to debug" anti-pattern, a `@dependabot rebase` smoke test that catches the "I pushed a fix but my existing PRs are still stuck" trap, and a post-rewrite `mergeStateStatus` check that catches the "I rewrote auto-merge.yml and now the open workflow-bump PR is DIRTY" anti-pattern.
 8. **Self-improvement**: writes `<project>/docs/dependabot-optimization-notes.md` and updates this skill with anything new it learned. Both are required deliverables, not optional polish.
 
 ## When the skill triggers
@@ -86,7 +86,7 @@ The skill itself is a single `SKILL.md` file. opencode scans for `**/SKILL.md` i
 
 ## Why a single file?
 
-opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the fourteen pitfalls, and the fourteen-item verification checklist in one place, with no extra navigation.
+opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, the fifteen pitfalls, and the fifteen-item verification checklist in one place, with no extra navigation.
 
 ## License
 

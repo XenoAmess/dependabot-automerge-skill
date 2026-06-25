@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "PR stuck DIRTY after I rewrote auto-merge.yml", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge", "fetch-metadata refused the commit signature". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -23,6 +23,7 @@ Use this skill when the user says any of:
 - "branch protection / required status check"
 - "I keep getting dependabot PRs to click through manually"
 - "PR is stuck at `BEHIND`"
+- "PR is stuck at `DIRTY` after I rewrote auto-merge.yml / dependabot.yml"
 - "`gh pr merge --auto` returns 422 / "Auto merge is not allowed""
 - "auto-merge says 'OAuth App cannot create or update workflow'"
 - "I changed auto-merge.yml and nothing happened"
@@ -30,7 +31,7 @@ Use this skill when the user says any of:
 - "auto-merge workflow runs but does nothing / always skipped"
 - "Dependabot PRs are bot authored but my workflow never fires"
 - "dependabot PRs are stuck after I changed build.yml"
-- "branch protection required check name no longer matches"
+- "branch protection required status check name no longer matches"
 - "CI looks like it's running but isn't gating the PR"
 - "I bumped the JDK matrix and now auto-merge is broken"
 - "dependabot PR went DIRTY (not BEHIND) after a sibling PR merged"
@@ -355,7 +356,7 @@ Why this works:
 
 ### Step 7 — Self-improvement (mandatory, not optional)
 
-After all fourteen Verification checks pass, before reporting success:
+After all fifteen Verification checks pass, before reporting success:
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
 2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section for what qualifies and how to do it.
@@ -592,6 +593,15 @@ If the actual check names have `isRequired: false` (or no entry exists under tha
 
 **Why this deserves its own pitfall**: the "DIRTY" state in GitHub's merge status is *meant* to signal "needs human resolution", so the manual-fix reflex is correct in the general case. It is wrong specifically for dependabot PRs because the bot is on a timer that will retry automatically. Forgetting that distinction costs you the PR's signed-commit guarantee.
 
+**Protocol-level reinforcement — `dependabot/fetch-metadata@v3` verifies the git signature, not just the commit author**: even `--amend --no-edit` (which preserves the `Author:` and `Signed-off-by:` trailer and looks correct in `git log`) breaks the commit's *git signature*, because amend produces a new commit object with a new hash. `dependabot/fetch-metadata` calls GitHub's signature-verification API on the commit; when the verification fails, the step emits:
+
+```
+Dependabot's commit signature is not verified, refusing to proceed.
+PR is not from Dependabot, nothing to do.
+```
+
+…and exits 0. The auto-merge workflow's overall run reports `success` (because the step didn't *fail* — it just declined), but no `should_merge` decision is ever made, no approval is recorded, and no auto-merge is enabled. If you ever reach for "let me just amend a trailing whitespace fix and force-push to unstick the rebase", expect the auto-merge workflow to silently no-op afterwards. Diagnostic: `gh run view <id> --log-failed | grep -F 'commit signature'`. Fix: do not amend. Wait or use `@dependabot recreate`.
+
 ### Pitfall 11 — Third-party auto-merge action silently succeeds while doing nothing
 
 **Symptom**: An open dependabot PR has `mergeStateStatus: CLEAN` and all required checks pass, but the PR is not merging. `gh pr view <N> --json autoMergeRequest` returns `null`. The `auto-merge` workflow run shows every step with `conclusion: success` (including any "Merge dependabot PR" or "Enable auto-merge" step). Looking at the actions log for that step, you see no error output — it just appears to do nothing.
@@ -704,11 +714,48 @@ You should see a fresh run for each rebased PR's `headRefName` with a `createdAt
 
 Side-effect mitigation: create the new labels in the repo *before* pushing the dependabot.yml change, so the retitled PRs pick them up cleanly on the first rebase. Notify the team that open PR titles will change. Old PRs that are already merged keep their original title forever.
 
+### Pitfall 15 — Rewriting `auto-merge.yml` (or any workflow it uses) creates `DIRTY` conflicts on open Dependabot PRs that bump that workflow
+
+**Symptom**: A Dependabot PR that bumps `actions/checkout` (or `actions/setup-node`, or any action referenced in `.github/workflows/auto-merge.yml`) is open and `BEHIND`. You rewrite `auto-merge.yml` on master (e.g. drop the `Checkout code` step, swap `dependabot/fetch-metadata@v2` for `@v3`, switch from `GITHUB_TOKEN` to `secrets.MYTOKEN`). You comment `@dependabot rebase` on the open PR. Within a minute, the PR's `mergeStateStatus` flips from `BEHIND` to `DIRTY` and `mergeable: CONFLICTING`. The Dependabot comment confirms the rebase failed. `@dependabot rebase` again → still DIRTY.
+
+**Cause**: A `DIRTY` state is a real merge conflict, not just a stale base. The Dependabot PR's diff tries to change a line that no longer exists in the post-rewrite file (or tries to insert a line where the surrounding context has shifted). This is structurally similar to Pitfall 7's adjacent-line variant, but the trigger is different: there, two parallel PRs race on adjacent lines; here, your own master-side rewrite deletes or moves the target line. `git rebase` regenerates the diff against the new base; the regenerated patch's `@@` context no longer matches the rewritten file, so it cannot apply.
+
+**Fix**: `@dependabot recreate` (not `rebase`). `recreate` regenerates the *entire* commit from current dependabot metadata against current master — it does not try to replay the old patch. The new commit's diff is computed against the live file, so a removed step simply doesn't appear in the diff at all. For a `actions/checkout` 6→7 bump across three workflow files where one of the workflows no longer has the line, recreate produces a two-file diff instead of a three-file conflict.
+
+```bash
+gh pr comment <N> --body "@dependabot recreate"
+```
+
+Wait for the `synchronize` event, confirm CI re-runs against the new commit, and let auto-merge proceed normally.
+
+**Avoidance — order of operations**: if you are about to rewrite `auto-merge.yml` *and* there is an open Dependabot PR that bumps any action used in `auto-merge.yml`, two safe orderings:
+
+1. **Let the bump merge first**: keep the rewrite of `auto-merge.yml` on a local branch until the Dependabot bump auto-merges into master. Then rebase your local branch on top of the post-bump master and push. The rewrite lands on top of the bumped versions; no conflict.
+2. **Push the rewrite first, then `@dependabot recreate` each affected PR**: this is what the standard optimization flow ends up doing (you cannot avoid pushing the new `auto-merge.yml` to fix the auto-merge bug that the bump itself exposed). Plan to comment `@dependabot recreate` on each open workflow-touching Dependabot PR as part of the migration push, not as a follow-up.
+
+**Diagnostic — distinguishing this from Pitfall 7's stale-base variant**:
+
+```bash
+# 1. Is the PR in DIRTY?
+gh pr view <N> --json mergeStateStatus,mergeable
+# mergeable: CONFLICTING + mergeStateStatus: DIRTY → real conflict, recreate is the right tool
+
+# 2. Did the rebase happen at all?
+gh pr view <N> --json commits --jq '.commits[-1].committedDate'
+# If the committedDate is older than your workflow push, dependabot hasn't tried yet — wait.
+
+# 3. Is the conflict on a line your rewrite changed?
+gh pr diff <N>
+# Look for `@@` hunks that reference content you removed in your rewrite.
+```
+
+**Why this deserves its own pitfall**: the rewrite is often *the same change* that the optimization skill is making (replace `GITHUB_TOKEN` with `MYTOKEN`, add a `semver-major` branch, drop `actions/checkout@v6`). The bump PR being "stuck at DIRTY" after a successful-looking migration push feels like a separate failure ("rebase is broken"), but it is a direct consequence of the migration push itself. Without this pitfall, the next agent will debug it as a rebase problem and waste cycles on `@dependabot rebase` loops. With it, they recognize the shape immediately and reach for `@dependabot recreate`.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all fourteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
+Do not tell the user "done" until all fifteen checks pass. After that, do not report "done" without also completing the Self-improvement loop below.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -724,6 +771,7 @@ Do not tell the user "done" until all fourteen checks pass. After that, do not r
 12. **No duplicate check names across multiple CI workflows**: GraphQL query on the check rollup of any open PR should show each `<job> (<matrix>)` exactly once. If the same name appears twice (different `databaseId`), Pitfall 12 applies — branch protection's "required" gate is ambiguous, and a failure in one workflow can be masked by a success in the other. Also: when running `gh secret set MYTOKEN`, verify the secret actually has a value (not an empty string); an empty secret shows as `GH_TOKEN: ` (colon with no value) in the workflow log, not as `GH_TOKEN: ***` (Pitfall 5 empty-secret diagnostic).
 13. **No `groups:` with `patterns: ["*"]` in `dependabot.yml`**: `cat .github/dependabot.yml` should not contain `patterns: ["*"]` anywhere. If it does, Pitfall 13 applies — the next weekly cycle will open a single multi-dependency PR, and any failure in that PR is un-attributable to a specific bump. Drop the `groups:` block on the next push; the next cycle will reopen the individual PRs, each tagged with the right `update-type` so the auto-merge policy picks them up correctly. One PR per dependency per cycle is the right shape.
 14. **Open dependabot PRs are re-evaluated after the auto-merge workflow changes**: after pushing changes to `.github/workflows/auto-merge.yml`, comment `@dependabot rebase` on each open dependabot PR (or use the one-liner in Pitfall 14). Within a few minutes, `gh run list --workflow="Dependabot auto-merge" --json headBranch,conclusion` should show a fresh `success` run on each rebased PR's branch — *not* zero runs (Pitfall 14 — workflow file change does not synchronize existing PRs). The per-step conclusions on that new run should be `success` (or `skipped` for steps the policy intentionally bypasses), not `failure` with a `workflows` permission error (Pitfall 5) or a `Not Found` (Pitfall 6, repo flag off).
+15. **No `DIRTY` regression on workflow-touching PRs after rewriting `auto-merge.yml`**: if any open dependabot PR bumps an action used in `auto-merge.yml` (or in any other file your rewrite modified), `gh pr view <N> --json mergeStateStatus,mergeable` should not show `DIRTY`/`CONFLICTING`. If it does, the PR's rebase failed because your rewrite removed the line the PR was trying to change — comment `@dependabot recreate` on it (Pitfall 15), wait for the new commit, and re-check. After recreate, `mergeable: MERGEABLE` and the auto-merge workflow re-runs against the new diff.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -732,7 +780,7 @@ If any check fails, do not report success. Go back to Pitfalls and diagnose.
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all fourteen checks pass), audit what you actually learned during
+(all fifteen checks pass), audit what you actually learned during
 **this** run and update this file before finishing the conversation.
 This is not optional polish — it is part of the deliverable. **Step 7**
 of Implementation makes this a required step, not a recommended one.
@@ -811,10 +859,10 @@ Do **not** update the skill when:
 
 1. Make the **minimum surgical edit** that captures the lesson. Do not
    rewrite sections that still apply; append or insert.
-2. Update affected counts (e.g. "thirteen pitfalls" → "fourteen pitfalls",
-   "thirteen verification checks" → "fourteen"). Grep for the old count first
-   to catch every reference. The current target is fourteen pitfalls and
-   fourteen verification checks.
+2. Update affected counts (e.g. "fourteen pitfalls" → "fifteen pitfalls",
+   "fourteen verification checks" → "fifteen"). Grep for the old count first
+   to catch every reference. The current target is fifteen pitfalls and
+   fifteen verification checks.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
    referenced from Pre-flight and Verification must actually exist.
@@ -1253,6 +1301,94 @@ hardest one to detect — every workflow run was green.
   that the wrapper-replacement recipe must also carry over the policy
   intent (`target:` → `update-type` checks).
 
+After optimizing `XenoAmess-Auto/qr_code_simple` (the run that produced
+this revision): an Android/Kotlin single-module project under the
+`XenoAmess-Auto` org (not the personal `XenoAmess` namespace), with an
+existing CI workflow (so the AGENTS.md "no CI" note was stale), existing
+auto-merge workflow (with several latent bugs), and four open dependabot
+PRs across two ecosystems.
+
+- **Pitfall 15 added**: rewriting `auto-merge.yml` to drop a step that an
+  open dependabot PR is trying to bump creates `DIRTY` (not just
+  `BEHIND`) on the next rebase. Symptom: a `actions/checkout 6→7` PR
+  goes `BEHIND → DIRTY` immediately after the rewrite pushes, because
+  the `Checkout code` step that the PR was going to bump `@v6`→`@v7`
+  on is no longer in the post-rewrite file. Cause: structurally
+  similar to Pitfall 7's adjacent-line variant, but the trigger is
+  master-side rewrites of files the PR targets, not parallel PRs.
+  Fix: `@dependabot recreate` (not `rebase`), which regenerates the
+  diff against current master instead of replaying the old patch.
+  Avoidance: when rewriting a workflow that an open dependabot PR
+  touches, push the rewrite first *only* if you plan to follow up
+  with `@dependabot recreate`; otherwise let the bump merge first.
+  See Pitfall 15 for the diagnostic and full avoidance recipe.
+
+- **Pitfall 10 enriched with the signature-verification detail.** The
+  existing Pitfall 10 said "the push is not signed by dependabot."
+  In the session I tested an exception: `git commit --amend --no-edit`
+  on a dependabot branch keeps the original `Author:` and
+  `Signed-off-by:` trailers, but the amended commit has a new SHA and
+  therefore a new (or absent) git signature. `dependabot/fetch-metadata@v3`
+  calls GitHub's signature-verification API, sees the signature is
+  invalid, and exits with `Dependabot's commit signature is not
+  verified, refusing to proceed.` / `PR is not from Dependabot, nothing to do.`
+  The workflow run reports `success` (the step declined but didn't
+  fail), and the PR is silently ignored. The existing Pitfall 10
+  recommendation (do not amend) is correct; the added detail is that
+  the failure is at the *signature protocol level*, not just the
+  author level — meaning any push that re-objects the commit (amend,
+  rebase, filter-branch) will produce the same silent no-op, even if
+  the diff is identical.
+
+- **Snag added: pre-existing `autoMergeRequest` from a previous
+  workflow version persists.** The repo had three open gradle-major
+  PRs (`kotlin_version 2.4.0`, `androidx.core-core-ktx 1.19.0`,
+  `androidx.activity-activity-ktx 1.13.0`) whose `autoMergeRequest`
+  had been set by the *old* workflow (which approved all majors).
+  The new policy correctly classifies them as `should_merge=false`
+  (gradle + major = leave for human review), but the workflow does
+  not unset a pre-existing `autoMergeRequest`. The PRs stay
+  `BLOCKED` only because their CI is genuinely failing for unrelated
+  reasons (the new kotlin/androidx versions break compilation). If
+  those CI failures were ever fixed, the PRs would auto-merge under
+  the *old* policy even though the new policy excludes them. The
+  only ways to clear it are: push a new commit (which fires the new
+  workflow, which can re-evaluate and re-set, but not clear, the
+  flag) or `close + reopen` the PR (which resets
+  `autoMergeRequest` to null per the Snag about Pitfall 14). There
+  is no `gh pr merge --disable-auto` flag.
+
+- **Snag added: reliable `gh secret set` pattern.** Several attempts
+  at `gh secret set NAME --body "$VAR"` / `gh secret set NAME -b
+  "$VAR"` / `echo "$VAR" | gh secret set NAME` from a single bash
+  session, with intermediate `gh secret delete` and re-set attempts,
+  produced one empty secret during testing. The workflow log
+  surfaced it as `GH_TOKEN: ` (colon, no asterisks) per the existing
+  Pitfall 5 empty-secret diagnostic. Fix: write to a temp file with
+  `mktemp + chmod 600`, then `gh secret set NAME < "$TMPF"`. Verify
+  after setting by dispatching a `workflow_dispatch` job that prints
+  the first few chars of the secret.
+
+- **Counts bumped**: fourteen → fifteen pitfalls, fourteen → fifteen
+  verification checks. The new Verification check #15 inspects
+  `mergeStateStatus` of any open dependabot PR that touches a
+  workflow file after a rewrite push; if `DIRTY`, the failure mode
+  is Pitfall 15 and the fix is `@dependabot recreate`. New trigger
+  phrases ("PR stuck DIRTY after I rewrote auto-merge.yml",
+  "fetch-metadata refused the commit signature") added to the
+  description and When-to-use list. The README's "fourteen pitfalls"
+  / "fourteen concrete checks" references bumped to "fifteen" in
+  three places.
+
+- **Self-improvement loop honored end-to-end.** The previous run
+  (XenoAmess/XenoAmessBlog) elevated the loop from "section to
+  read" to "Step 7 of Implementation". This run was the first to
+  apply that framing: the per-project notes file was written first
+  (`docs/dependabot-optimization-notes.md` in the project) and the
+  skill update followed. The agent originally forgot the skill
+  update and the user had to prompt for it; documenting that lapse
+  here so future runs treat both halves as a single deliverable.
+
 ---
 
 ## Snags to watch for
@@ -1322,6 +1458,19 @@ hardest one to detect — every workflow run was green.
 - **`prefix-development` + `include: "scope"` produces `build(deps-dev)(deps-dev): ...` for Maven.** Maven dependencies are reported as `dependency-type: direct:development` by dependabot, so `prefix-development` and `include: "scope"` both apply to the same package. Setting `prefix-development: "build(deps-dev)"` plus `include: "scope"` yields `build(deps-dev)(deps-dev):` — the development prefix and the development scope collide. For Maven projects, just use a single `prefix:` (e.g. `build(deps)`) and skip `prefix-development`; the per-PR title will be `build(deps)(deps): ...` at worst, which is the same pattern the existing snag above describes. Alternatively keep `prefix-development` but set it to the same value as `prefix` so the collision is invisible.
 
 - **Check name format is `<job-name> (<matrix-axes>)`, not `<workflow> / <job>`.** A common source of duplicate check names when two workflows (`build.yml` and `build_extra.yml`, say) both define a job called `build` with the same matrix. Renaming `name:` on the workflow does not help; the job ID has to differ. See Pitfall 12 for the full pattern and fix.
+
+- **Pre-existing `autoMergeRequest` from a previous workflow version persists.** When you tighten the auto-merge policy (e.g. add a `semver-major` exclusion for github-actions, switch from `target: minor` to a stricter rule, or replace a permissive wrapper with explicit steps), existing open dependabot PRs that the old workflow already armed with `autoMergeRequest` keep that flag. The new workflow runs on the next `synchronize` event but only adds or re-sets `autoMergeRequest`; it does not clear one set by the old version. If those PRs happen to pass CI (or already pass it), they will auto-merge under the *old* policy even after the new policy is in place. To unstick them: `close + reopen` the PR (Pitfall 14 pattern), or push any new commit to its branch so the new workflow re-evaluates and re-sets `autoMergeRequest` to whatever the new policy decides. There is no `gh pr merge --disable-auto` flag — clearing requires a PR-level event.
+
+- **Setting `MYTOKEN` reliably: prefer the temp-file pattern over shell pipelines.** When scripting `gh secret set NAME`, multiple invocations from the same shell session are easy to mess up: `--body "$VAR"` with a shell variable, `echo "$VAR" | gh secret set NAME` via stdin, and `gh secret set NAME -b "$VAR"` all *can* work, but a typo or a partially-overwritten variable can silently produce an empty secret. The workflow log will show `GH_TOKEN: ` (colon, no asterisks) per the Pitfall 5 empty-secret diagnostic, but you may not catch it until the first workflow run fails. The most reliable pattern is to write the token to a temp file with `mktemp` + `chmod 600`, then pipe it in explicitly:
+
+  ```bash
+  TMP=$(mktemp) && chmod 600 "$TMP" && gh auth token > "$TMP" \
+    && gh secret set MYTOKEN < "$TMP" && rm -f "$TMP"
+  ```
+
+  Verify after setting with a one-shot diagnostic workflow (Pitfall 5 enrichment, also see Verification #12): create a temporary `verify-mytoken.yml` with `on: workflow_dispatch`, print `${MYTOKEN:0:6}` (and `wc -c`), `workflow_dispatch` it, read the log, then delete the workflow file and commit the deletion.
+
+- **`gh pr merge --auto --rebase` is idempotent for `autoMergeRequest` but not for the workflow-run history.** Calling it directly from the shell (or from a verification smoke test) sets `autoMergeRequest` once; subsequent calls do not produce a new entry. But each call to the auto-merge workflow's `gh pr merge --auto --rebase` step does produce a workflow run. If the user-OAuth-token smoke test in Pitfall 5 has already set auto-merge on the test PR, the workflow run that fires after the rebase will call `gh pr merge --auto --rebase` again — and GitHub will treat it as a no-op for the merge itself but as a fresh run for the audit log. This is harmless; just don't be surprised by the run count.
 
 ---
 
@@ -1417,3 +1566,5 @@ gh pr view <N> --json autoMergeRequest --jq '.autoMergeRequest.enabledBy.login'
 - "A dependabot PR is stuck at `DIRTY` (not BEHIND) after a sibling PR merged" → Pitfall 7 adjacent-line variant + Pitfall 10. Wait or `@dependabot rebase`; do NOT push a manual fix.
 - "I tried `gh auth refresh -s workflow` and it just hangs" → see the anti-pattern note in Pitfall 5. Use the user-OAuth-token shortcut, or ask the user to add the scope via the web UI.
 - "The first dependabot PRs are all major version bumps touching workflow files and the first one failed" → this is the worst-case test path. Re-check Pre-flight 5 (token scope), Verification check #8/#11, and Pitfall 5. The "first batch is hardest" snag explains why.
+- "A dependabot PR is stuck at `DIRTY` after I rewrote `auto-merge.yml` (not after a sibling PR merged)" → Pitfall 15. Your rewrite deleted or moved a line the PR was trying to change. Comment `@dependabot recreate` on the PR; the regenerated diff will skip the deleted step.
+- "I amended a dependabot commit and the auto-merge workflow now silently no-ops" → Pitfall 10 protocol-level enforcement. `dependabot/fetch-metadata` verifies the commit's git signature, which amend always breaks. Use `@dependabot recreate` instead; do not amend.
