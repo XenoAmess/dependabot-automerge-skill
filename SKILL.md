@@ -687,6 +687,14 @@ You should see a fresh run for each rebased PR's `headRefName` with a `createdAt
 
 **Why this deserves its own pitfall**: any time you change `auto-merge.yml` — whether to fix a login mismatch, add a `semver-major` branch, or switch tokens — the fix is invisible to existing PRs until they get a new commit. The "push a fix and watch it work" mental model applies to the next *new* dependabot PR, not to the ones already on the PR list. Forgetting this is the difference between "the optimization worked" and "the optimization worked for next week but my PRs from last week are still stuck". This pitfall is what makes the other pitfalls tractable in a single optimization session instead of "wait for the next cycle".
 
+**Adjacent side-effect — dependabot.yml changes retitle existing PRs**: when you change `commit-message.prefix`, `labels`, or other dependabot.yml fields in the same change as the auto-merge workflow, the `@dependabot rebase` cycle may retitle existing open PRs to match the new prefix. Observed in a maven + github-actions project: a PR originally titled `build(deps): bump actions/cache from 5 to 6` became `ci: bump actions/cache from 5 to 6` after the new prefix was applied, because dependabot regenerated the title during rebase. This is expected dependabot behavior (the title is computed from current config), but it means:
+
+- Notification rules that filter by title (`build(deps):`) will stop firing for the retitled PRs.
+- The PR list briefly looks inconsistent — some old-title, some new-title — until every open PR gets touched.
+- Labels added in dependabot.yml only get applied to PRs that are recreated or rebased after the change; PRs already merged are unaffected.
+
+Side-effect mitigation: create the new labels in the repo *before* pushing the dependabot.yml change, so the retitled PRs pick them up cleanly on the first rebase. Notify the team that open PR titles will change. Old PRs that are already merged keep their original title forever.
+
 ---
 
 ## Verification (mandatory before reporting done)
