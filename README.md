@@ -41,6 +41,7 @@ It activates on phrases like:
 - "MYTOKEN is set but auto-merge still fails with empty GH_TOKEN"
 - "two CI workflows produce the same `build (os, java)` check name"
 - "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
+- "dependabot PR title is `build(deps-dev)(deps-dev)` Maven double prefix"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
