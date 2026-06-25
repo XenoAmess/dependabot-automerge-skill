@@ -1157,6 +1157,34 @@ produced this revision):
 - Counts unchanged: still fourteen pitfalls, fourteen verification checks.
   The changes are pre-flight / snag enrichment, not new failure modes.
 
+After optimizing `XenoAmess/XenoAmessBlogFramework` (the run that produced
+this revision):
+
+- **`dependabot.yml` `include: "scope"` collision observed on npm and
+  github-actions ecosystems.** The existing config had
+  `prefix: "build(deps)"` plus `include: "scope"` for both ecosystems,
+  producing PR titles like
+  `build(deps)(deps): bump the github-actions group with 5 updates`.
+  Removing `include: "scope"` and switching github-actions to `prefix: "ci"`
+  (with npm keeping `build(deps)` / `build(deps-dev)`) produced clean
+  single-scope titles. This confirms the existing Snag that `prefix:` +
+  `include: "scope"` collides; the concrete npm/github-actions example was
+  added here for future reference.
+- **`groups:` with `patterns: ["*"]` observed in an inherited npm config.**
+  The repo had `npm-minor-and-patch` and `npm-major` groups as well as a
+  `github-actions` group, all bundling every available upgrade into one PR
+  per group. After dropping the `groups:` blocks, the next cycle will reopen
+  individual PRs, each with the correct `update-type` for the auto-merge
+  policy. This reinforces Pitfall 13 / the related Snag.
+- **No workflow or branch-protection changes required.** The repo already
+  had a working `auto-merge.yml` (using `MYTOKEN` for approve/merge),
+  `build.yml` scoped to `push: branches: [master]` + `pull_request`,
+  `allow_auto_merge=true`, and branch protection requiring
+  `tester (ubuntu-latest, 26.x)`. Recent auto-merge workflow runs had
+  already merged eligible PRs, including a workflow-touching grouped
+  github-actions PR, confirming the OAuth-token-as-`MYTOKEN` path works.
+- Counts unchanged: still fourteen pitfalls, fourteen verification checks.
+
 ---
 
 ## Snags to watch for

@@ -47,6 +47,7 @@ It activates on phrases like:
 - "local clone is way behind origin and `git status` lies"
 - "dependabot grouped PR closed my individual PRs — should I worry?"
 - "dependabot grouped my major upgrades into one huge PR that broke three things at once"
+- "my github-actions PR titles are `build(deps)(deps): ...` instead of `ci: ...`"
 - "patterns: `[\"*\"]` in my dependabot.yml groups everything into a single PR"
 - "drop the `groups:` block from dependabot.yml"
 - "one PR per dependency please, not one PR per ecosystem"
