@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -1184,6 +1184,74 @@ this revision):
   already merged eligible PRs, including a workflow-touching grouped
   github-actions PR, confirming the OAuth-token-as-`MYTOKEN` path works.
 - Counts unchanged: still fourteen pitfalls, fourteen verification checks.
+
+After optimizing `XenoAmess/XenoAmessBlog` (the run that produced this
+revision): a single repo simultaneously exhibited Pitfalls 1, 5, 6, and
+11. The fix was straightforward (rewrite the wrapper, fix the secret
+name, enable `allow_auto_merge`, set branch protection), but the
+*diagnostic* is worth recording because the failure mode was the
+hardest one to detect — every workflow run was green.
+
+- **All-four-pitfalls-at-once observed in the wild.** The repo's
+  `auto-merge.yml` was using `ahmadnassri/action-dependabot-auto-merge@v2`
+  with `target: minor` and `github-token: ${{ secrets.mytoken }}` (lower-
+  case). Combined with `allow_auto_merge: false` at the repo level, every
+  auto-merge workflow run reported `success` (because the wrapper swallows
+  errors) while doing nothing useful. PR #23 (`actions/checkout` 6→7) was
+  the canary: a *major* bump, which `target: minor` would have skipped
+  even if the wrapper worked. The empty-`mytoken` (case mismatch with
+  `MYTOKEN`) made `gh pr merge --auto` 422 with `GH_TOKEN:` (empty) in
+  the log. The `allow_auto_merge: false` made it 422 even if the token
+  had been correct. None of these errors were visible in the Actions tab
+  because the wrapper reports green exit code on swallowed failures.
+
+- **Diagnostic sequence that finally identified all four layers**:
+  1. `gh pr view <N> --json autoMergeRequest` → `null` after multiple
+     workflow runs → something is failing silently.
+  2. `gh run view <id> --json jobs --jq '.jobs[].steps[].conclusion'` →
+     every step `success`, including the wrapper step → Pitfall 11.
+  3. `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` → `false` →
+     Pitfall 6, confirmed via the wrapper's swallowed 422.
+  4. `gh secret list` → only `MYTOKEN` (uppercase) exists; workflow uses
+     `secrets.mytoken` (lowercase) → Pitfall 5, the case mismatch makes
+     `${{ secrets.mytoken }}` expand to empty.
+  5. PR title is `Bump actions/checkout from 6 to 7` → semver-major →
+     `target: minor` in the wrapper would have skipped it even with a
+     working token → Pitfall 1, the policy gap.
+
+- **`@dependabot rebase` vs the migration push when workflows changed in
+  the same PR.** Rewriting `auto-merge.yml` did not re-evaluate the
+  existing open Dependabot PR; it stayed at `autoMergeRequest: null`
+  until something pushed to its branch. Commenting `@dependabot rebase`
+  forced dependabot to push a new commit, which re-fired the
+  `pull_request` event under the new workflow definition. Within ~90
+  seconds, the new workflow approved the PR, set `autoMergeRequest` (via
+  `gh pr merge --auto --rebase`), and the PR auto-merged once the
+  required check passed. This is the same Pitfall 14 path used in
+  earlier revisions, but here it was applied to a wrapper-action repo
+  rather than a `gh pr merge` repo — the mechanics are identical.
+
+- **Empty-secret diagnostic confirmed on `mytoken`**. The skill's
+  Pitfall 5 already describes the empty-secret tell (workflow log shows
+  `GH_TOKEN:` with a trailing colon and no masked asterisks). This run
+  confirmed it: the workflow used `secrets.mytoken` (lowercase, undefined)
+  while the repo had `MYTOKEN` (uppercase, set). The wrapper did not
+  surface the error visibly because its exit code swallowed the 422.
+
+- **Wrapper-action repos may need more than the "replace with explicit
+  gh pr merge" recipe.** In this repo the wrapper was also configured
+  with `target: minor`, which would have skipped the major-version
+  `actions/checkout` PR even after the wrapper was replaced with the
+  standard explicit-step workflow. The replacement recipe must also
+  carry the same `semver-major` policy table (or the user's preferred
+  policy) from Step 1 — don't assume the existing wrapper's policy
+  matches what the new workflow should do.
+
+- **Counts unchanged**: still fourteen pitfalls, fourteen verification
+  checks. The new content is a worked example of multiple pitfalls
+  compounding into a single hard-to-diagnose failure, plus a reminder
+  that the wrapper-replacement recipe must also carry over the policy
+  intent (`target:` → `update-type` checks).
 
 ---
 

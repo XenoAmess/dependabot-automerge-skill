@@ -23,6 +23,7 @@ It activates on phrases like:
 - "optimize dependabot"
 - "PR stuck waiting for checks"
 - "auto-merge skipped CI"
+- "auto-merge workflow is green but the PR never merges / nothing happens"
 - "branch protection required status check"
 - "I want major version Dependabot PRs to merge automatically"
 - "PR stuck at `BEHIND`"
@@ -71,7 +72,7 @@ Restart opencode after adding the path. Then ask opencode to set up auto-merge f
 
 ## Self-improving
 
-The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`).
+The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`).
 
 ## Layout
 
