@@ -880,10 +880,11 @@ an update: targeted edits, counts grepped, README synced, single commit.
   1. Switch the remote to SSH: `git remote set-url origin git@github.com:<owner>/<repo>.git`
   2. Re-authenticate `gh` with the `workflow` scope (note: classic OAuth app tokens cannot add this scope; you need a fine-grained PAT or a different auth method). SSH is simpler.
 
-- **`@dependabot rebase` vs `close+reopen`: pick by intent.** Both re-trigger the `pull_request` workflow, but they differ in what happens to the PR branch:
-  - `@dependabot rebase` — **force-pushes** the PR branch onto the latest base, **resets `autoMergeRequest` to null**, then the auto-merge workflow re-runs and re-enables it. Use when you want the PR to also pick up the latest base (resolves BEHIND, lets you skip ahead of a slow rebase).
+- **`@dependabot rebase` vs `close+reopen` vs `update-branch` API: pick by intent.** All three re-trigger the `pull_request` workflow. They differ in what happens to the PR branch and how fast they act:
+  - `gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch` — **rebases the branch onto the current base** and **preserves `autoMergeRequest`** (does not reset it). Requires `repo` scope; admins and many OAuth tokens have it. Fastest of the three: bypasses dependabot's hourly auto-rebase schedule entirely, no comment round-trip. Use this when a dependabot PR is `BEHIND` and you want it unblocked right now without losing its auto-merge setting.
+  - `@dependabot rebase` (comment) — **force-pushes** the PR branch onto the latest base, **resets `autoMergeRequest` to null**, then the auto-merge workflow re-runs and re-enables it. Subject to dependabot's hourly rebase schedule; if you comment while one is already queued, the second request may be coalesced. Use when you also want dependabot to regenerate the patch (e.g. you suspect a DIRTY state from a sibling-line conflict that won't be fixed by a clean rebase).
   - `gh pr close <N> --delete-branch=false && gh pr reopen <N>` — **does not touch the branch**. Just re-fires the `pull_request` event. Use when you only want to force the auto-merge workflow to re-evaluate (e.g. you just changed `auto-merge.yml`'s policy and want existing PRs to be judged under the new rules without rebase churn).
-  - Neither is "wrong", but pick deliberately. Default to `close+reopen`; reach for rebase only when you also need to update the base.
+  - For draining a `BEHIND` backlog after the migration push, the **`update-branch` API is the right tool** — it keeps `autoMergeRequest` set, so as soon as CI re-runs and passes, the merge fires without a second auto-merge-workflow run. With `@dependabot rebase` you eat the rebase → re-enable → re-run-CI → merge sequence on every PR.
 
 - **Changing `commit-message.prefix` on already-open PRs produces duplicated prefixes**. If a PR's title is already `build(deps): bump foo` and you push a new `dependabot.yml` with `commit-message.prefix: build(deps)`, the next rebase will produce `build(deps)(deps): bump foo`. Cosmetic only — does not break auto-merge. To clean up, `close+reopen` the affected PR; the next dependabot push will regenerate the title under the new prefix.
 
@@ -941,10 +942,18 @@ gh pr reopen <N>
 # Force dependabot to rebase a PR (resolves BEHIND)
 gh pr comment <N> --body "@dependabot rebase"
 
+# Faster: force-rebase via API, preserves autoMergeRequest
+gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch
+
 # Batch-rebase all open Dependabot PRs (filter by author — never rebase human PRs)
 gh pr list --state open --json number,author \
   --jq '.[] | select(.author.login == "app/dependabot" or .author.login == "dependabot[bot]") | .number' | \
   xargs -I {} sh -c 'gh pr comment {} --body "@dependabot rebase"'
+
+# Faster batch rebase via the update-branch API (one HTTP call per PR, no comment queue)
+gh pr list --state open --json number,author \
+  --jq '.[] | select(.author.login == "app/dependabot" or .author.login == "dependabot[bot]") | .number' | \
+  xargs -I {} gh api -X PUT repos/<owner>/<repo>/pulls/{}/update-branch
 
 # Set git remote to SSH (when gh OAuth lacks workflow scope)
 git remote set-url origin git@github.com:<owner>/<repo>.git
