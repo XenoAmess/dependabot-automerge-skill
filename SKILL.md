@@ -1444,6 +1444,73 @@ PRs across two ecosystems.
   update and the user had to prompt for it; documenting that lapse
   here so future runs treat both halves as a single deliverable.
 
+After optimizing `xenaomess-shade/shade_asm` (the run that produced
+this revision): a small Maven shade-jar repo under the
+`xenaomess-shade` organization. The repo had a working dependabot.yml
+but no auto-merge workflow; PR #7 (`asm.version` 9.9.1→9.10.1) was
+already open and stuck at `CLEAN` (no `autoMergeRequest`).
+
+- **`prefix: "deps"` + `include: "scope"` (no `prefix-development`)
+  observed on a live repo.** The existing config produced PR titles
+  `deps(deps): bump asm.version from 9.7 to 9.9.1` for production
+  deps and `deps(deps-dev): bump org.apache.maven.plugins:maven-shade-plugin`
+  for build plugins. Note the `-dev` on the scope — dependabot
+  automatically changes the scope to `deps-dev` for development
+  dependencies when `include: "scope"` is on, even without an
+  explicit `prefix-development`. This is the *opposite* of the
+  existing Snag 1513 pattern (`prefix-development: "build(deps-dev)"`
+  + `include: "scope"` → `build(deps-dev)(deps-dev): ...`). Both
+  end up producing the same doubled scope. The clean fix is the
+  Step 6 recipe: drop `include: "scope"`, use `prefix: "build(deps)"`
+  + `prefix-development: "build(deps-dev)"` (no `include`). The
+  dev/prod distinction survives in the title, the doubling does
+  not. Verified: PR #7 retitled itself from `deps(deps): ...` to
+  `build(deps): ...` on the first rebase after the config change.
+
+- **Burst-on-ecosystem-add observed: 4 PRs at once, all racing.** The
+  repo previously had only `package-ecosystem: "maven"` configured.
+  Adding `github-actions` in the same change caused dependabot to
+  fire 4 PRs simultaneously on the next cycle — `actions/checkout
+  4→7`, `actions/setup-java 4→5`, `actions/upload-artifact 4→7`, and
+  `dependabot/fetch-metadata 2→3`. All 4 are `semver-major` for
+  github-actions and all 4 touched `.github/workflows/*.yml`. With
+  the Step 1 policy table this branch auto-merges, so they all
+  cleared in ~2 minutes (CI re-ran, auto-merge fired). The pre-
+  existing PR #7 (the maven minor) repeatedly went `BEHIND` as each
+  github-actions PR landed in front of it; took 2 `@dependabot
+  rebase` cycles to drain. Lesson: when adding a new ecosystem to
+  `dependabot.yml`, expect a burst of N PRs, and use the
+  `update-branch` API (Quick Reference) instead of `@dependabot
+  rebase` for the pre-existing open PRs — it preserves
+  `autoMergeRequest` and avoids the rebase → re-enable → re-CI
+  → re-merge cycle on every iteration.
+
+- **Migrating `actions/setup-java` from v4 to v5 was the workflow
+  change that flipped branch protection's required check.** When
+  dependabot opened the `setup-java 4→5` PR, the workflow file
+  temporarily referenced a different action version. The required
+  check name stayed `build` (no matrix dimension changes here, so
+  Pitfall 9 didn't apply), but the run history visibly mixed v4 and
+  v5 setups for ~2 minutes until the PR merged. No action needed,
+  just noting that the "burst" includes the CI workflow itself
+  upgrading, which can briefly confuse diagnostic output if you're
+  watching closely.
+
+- **The `Bypassed rule violations` push message is a success
+  signal, not an error.** When pushing via SSH with
+  `enforce_admins: false`, GitHub prints
+  `remote: Bypassed rule violations for refs/heads/master: ... -
+  Required status check "build" is expected.` and accepts the push.
+  First-time users may panic at this; it is the expected success
+  path when admins push workflow changes that have not yet been
+  validated by CI.
+
+- **Counts unchanged**: still sixteen pitfalls, sixteen verification
+  checks. The new content is one Worked-Example entry (this one)
+  and a Snag enrichment for the burst-on-ecosystem-add scenario.
+  No new failure mode, just a more focused protocol for one already-
+  documented edge case (Pitfall 7 race during a multi-PR drain).
+
 ---
 
 ## Snags to watch for
@@ -1491,6 +1558,8 @@ PRs across two ecosystems.
 - **`open-pull-requests-limit: 100` is a foot-gun**. The Dependabot default is 5. Daily schedule + limit 100 = a backlog that never drains and a noisy PR tab. Recommended defaults: `weekly` schedule, limit 5–10 for github-actions, 10–20 for maven. Grouped updates (`groups:` in dependabot.yml) reduce the multiplier — one grouped PR replaces N individual ones.
 
 - **Migration push makes every open Dependabot PR go `BEHIND` at once.** When you push the auto-merge / dependabot.yml / build.yml changes that this skill recommends, master advances by one or more commits. Every open Dependabot PR that was previously `CLEAN` instantly becomes `BEHIND`. With `strict: true` branch protection, auto-merge cannot fire until each one rebases — and Dependabot's auto-rebase is hourly, not instant. Two options: (a) comment `@dependabot rebase` on every open PR in one batch (the Quick Reference batch script filters by author so it skips human PRs), or (b) accept that the queue will drain within ~1h. Plan for this in the migration order: push workflow changes → immediately batch-rebase all open Dependabot PRs → wait for them to settle → run the verification checklist.
+
+- **Adding a new ecosystem to `dependabot.yml` triggers a burst of N PRs that race against each other.** If you add a `package-ecosystem` that was previously absent (e.g. introducing `github-actions` to a Maven-only repo, or `npm` to a Python-only repo), the very next cycle opens N PRs — one per outdated package in the new ecosystem. All N PRs hit Pitfall 7 simultaneously, and any pre-existing open PRs in the *original* ecosystem keep getting reblocked as the new ones merge in front of them. For the new burst, auto-merge (Step 1 policy) handles them cleanly; the bottleneck is the *pre-existing* PRs from the original ecosystem. For those, prefer the `update-branch` API (`gh api -X PUT repos/<owner>/<repo>/pulls/<N>/update-branch`) over `@dependabot rebase` — it preserves `autoMergeRequest` and avoids the rebase → re-enable → re-CI → re-merge cycle on every iteration. Observed: a Maven minor PR took 2 `@dependabot rebase` cycles to drain while 4 github-actions major PRs merged in front of it on each cycle; switching to `update-branch` would have cut this to one cycle per PR.
 
 - **Adding `groups:` to `dependabot.yml` immediately closes the original per-dependency PRs as superseded.** This is a free way to drain a backlog of N individual PRs into 1 (or a few) grouped PRs. The new grouped PR(s) then proceed through the normal auto-merge path; the original PRs close themselves. Caveat: the close happens the moment the new grouped PR is opened, which is *before* the grouped PR is merged. If for any reason the grouped PR is then closed without merging (e.g. a CI failure or a maintainer close), the individual PRs do not reopen — you have to wait for the next weekly cycle to regenerate them. For low-risk projects this is a clean win; for repos where individual PRs are deliberately being reviewed out-of-band, do not add `groups:` without first merging or closing the existing ones.
 

@@ -55,6 +55,7 @@ It activates on phrases like:
 - "patterns: `[\"*\"]` in my dependabot.yml groups everything into a single PR"
 - "drop the `groups:` block from dependabot.yml"
 - "one PR per dependency please, not one PR per ecosystem"
+- "I added github-actions to dependabot.yml and now 4 PRs opened at once and are racing"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
@@ -75,7 +76,7 @@ Restart opencode after adding the path. Then ask opencode to set up auto-merge f
 
 ## Self-improving
 
-The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`).
+The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`).
 
 ## Layout
 
