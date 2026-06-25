@@ -83,6 +83,8 @@ Before changing anything, gather context. Do not skip these.
 
 If the repo does not have `gh` auth, stop and ask the user to log in. Do not guess at branch protection.
 
+6. **Sync local clone with `origin` before reading local files.** A local clone left over from a previous session can be many commits behind `origin/master` (especially on repos where dependabot has been auto-merging regularly). `git status` reports "nothing to commit, working tree clean" in that state because it is comparing against the stale local tracking ref — the staleness only shows up after `git fetch`. Always run `git fetch origin` (or `git pull --ff-only`) before reading `.github/workflows/*.yml` from disk. Otherwise you will optimize against files that are no longer what GitHub is running, push a "fix" that is actually a no-op, and wonder why nothing changed.
+
 ---
 
 ## Strategy
@@ -447,6 +449,13 @@ gh pr view <N> --json autoMergeRequest --jq '.autoMergeRequest.enabledBy.login'
 ```
 
 If the second command prints a real login (e.g. `XenoAmess`), the token has sufficient scope. The PR's `autoMergeRequest` is now set; CI will run and the merge will fire when green. If the command fails with the `enablePullRequestAutoMerge` GraphQL error, the token is a classic PAT or app token without `workflow` — fall back to the separate-PAT path.
+
+**Smoke-test variant — no open dependabot PRs available.** If the repo has no open dependabot PRs (e.g. all are merged or stuck-closed), you can still verify scope by running `gh pr merge <N> --auto --rebase` against a closed dependabot PR. The response distinguishes between the two failure modes:
+
+- `Pull request Pull request is closed` (GraphQL error) → token has the right scope; the PR's `state: closed` is what blocked the operation. This is the success case for the smoke test.
+- `OAuth App ... without 'workflows' permission (enablePullRequestAutoMerge)` → token lacks `workflow` scope; fall back to the separate-PAT path.
+
+This is useful when you want to verify `MYTOKEN` scope without waiting for the next dependabot cycle to produce a fresh PR.
 
 **Anti-pattern — `gh auth refresh -s workflow`**: do not try to add the `workflow` scope to an existing OAuth token from a non-interactive CLI session. The command will hang waiting for a browser confirmation. Either use the shortcut above (if the user is admin), or ask the user to add the scope via the GitHub web UI (`Settings → Developer settings → Personal access tokens → [token] → Edit scopes → Workflow ✓ → Update token`) and then continue.
 
@@ -914,6 +923,31 @@ After optimizing `cyanpotion/multi_language`
 this revision):
 
 - **All three of Pitfall 6, 11, and the missing-`pull_request`-event form of Pitfall 2 fired at once in the same repo.** Pre-flight found 7 open dependabot PRs all stuck at `mergeStateStatus: CLEAN` with `autoMergeRequest: null`, every `auto-merge` workflow run green, `allow_auto_merge: false`, and `build.yml` had only `on: [push]`. The wrapper action (Pitfall 11) was hiding the `allow_auto_merge: false` 422 (Pitfall 6), and the `on: [push]`-only CI was "accidentally" running because dependabot pushes on rebase (Pitfall 2 subtle variant). Replacing the wrapper with explicit `gh pr review` + `gh pr merge --auto --rebase` steps exposed all three failures as red `conclusion: failure` rows on the very first run. Lesson: when troubleshooting a "stuck" dependabot repo, the three pitfalls compound so often that the diagnostic is the same in all three cases — `gh run list` conclusion vs `gh pr view --json autoMergeRequest` — and the fix is the same in all three cases too (replace the wrapper, enable `allow_auto_merge`, add `pull_request` to `on:`).
+
+After optimizing `XenoAmess/add-from-repo-maven-plugin` (the run that produced
+this revision):
+
+- **Pre-flight check 6 added**: sync local clone with `origin` before reading
+  local files. A stale local tracking ref makes `git status` report
+  "working tree clean" while the working copy is actually 92 commits
+  behind; you optimize against files that are no longer what GitHub is
+  running and push a no-op "fix". Always `git fetch origin` first.
+- **Pitfall 5 enriched** with a smoke-test variant for when there are no
+  open dependabot PRs available. Calling `gh pr merge <N> --auto --rebase`
+  against a closed dependabot PR returns `"Pull request is closed"` (not
+  a workflow-permission GraphQL error), which still proves the token has
+  the required scope. Useful when you want to verify `MYTOKEN` without
+  waiting for the next dependabot cycle.
+- **New snag added**: adding `groups:` to `dependabot.yml` immediately
+  closes the original per-dependency PRs as superseded. This is a free
+  way to drain a backlog, but if the new grouped PR is then closed
+  without merging, the individual PRs do not reopen — you wait for the
+  next weekly cycle. Caveat noted in Snags section.
+- **Pre-flight trigger phrase refined**: the smoke-test bullet no longer
+  requires an "open" PR (it works on closed PRs too). README trigger
+  list gained three new phrases covering the new diagnostics.
+- Counts unchanged: still twelve pitfalls, twelve verification checks.
+  The changes are diagnostic / snag enrichment, not new failure modes.
 - **New snag added**: `prefix-development` + `include: "scope"` produces `build(deps-dev)(deps-dev): ...` for Maven. Maven deps are `dependency-type: direct:development` by default, so both fields apply to the same package; the development prefix and the development scope collide. Fix: use a single `prefix:` and skip `prefix-development` for Maven projects.
 - **User OAuth shortcut for `MYTOKEN` verified end-to-end on a workflow-touching PR.** `gh auth token` → `gh secret set MYTOKEN` → first auto-merge workflow run on a PR that bumps `actions/checkout` succeeded with `autoMergeRequest.enabledBy.login: "XenoAmess"`. The PR auto-merged within ~1 minute of the rebase. No separate PAT was needed. The shortcut now has a concrete worked example to point to.
 
@@ -964,6 +998,8 @@ One commit, ~12 insertions (one snag + a worked-example entry), no rewrite.
 - **`open-pull-requests-limit: 100` is a foot-gun**. The Dependabot default is 5. Daily schedule + limit 100 = a backlog that never drains and a noisy PR tab. Recommended defaults: `weekly` schedule, limit 5–10 for github-actions, 10–20 for maven. Grouped updates (`groups:` in dependabot.yml) reduce the multiplier — one grouped PR replaces N individual ones.
 
 - **Migration push makes every open Dependabot PR go `BEHIND` at once.** When you push the auto-merge / dependabot.yml / build.yml changes that this skill recommends, master advances by one or more commits. Every open Dependabot PR that was previously `CLEAN` instantly becomes `BEHIND`. With `strict: true` branch protection, auto-merge cannot fire until each one rebases — and Dependabot's auto-rebase is hourly, not instant. Two options: (a) comment `@dependabot rebase` on every open PR in one batch (the Quick Reference batch script filters by author so it skips human PRs), or (b) accept that the queue will drain within ~1h. Plan for this in the migration order: push workflow changes → immediately batch-rebase all open Dependabot PRs → wait for them to settle → run the verification checklist.
+
+- **Adding `groups:` to `dependabot.yml` immediately closes the original per-dependency PRs as superseded.** This is a free way to drain a backlog of N individual PRs into 1 (or a few) grouped PRs. The new grouped PR(s) then proceed through the normal auto-merge path; the original PRs close themselves. Caveat: the close happens the moment the new grouped PR is opened, which is *before* the grouped PR is merged. If for any reason the grouped PR is then closed without merging (e.g. a CI failure or a maintainer close), the individual PRs do not reopen — you have to wait for the next weekly cycle to regenerate them. For low-risk projects this is a clean win; for repos where individual PRs are deliberately being reviewed out-of-band, do not add `groups:` without first merging or closing the existing ones.
 
 - **Grouping in dependabot.yml closes the old individual PRs.** When you add a `groups:` block to an ecosystem that already has individual PRs open, Dependabot on the next cycle closes those individual PRs and opens a single grouped PR with a title like `chore(deps): bump the major group with 2 updates`. This is expected — the old PRs show up as `CLOSED` (not merged), the new grouped PR inherits their changes, and `update-type` for the grouped PR reports the highest-severity bump in the group. Don't panic if your "verified working" PRs vanish from the open list; the replacement is the grouped PR.
 

@@ -42,6 +42,9 @@ It activates on phrases like:
 - "two CI workflows produce the same `build (os, java)` check name"
 - "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
 - "dependabot PR title is `build(deps-dev)(deps-dev)` Maven double prefix"
+- "no open dependabot PRs but I still want to verify MYTOKEN scope"
+- "local clone is way behind origin and `git status` lies"
+- "dependabot grouped PR closed my individual PRs — should I worry?"
 
 See the `description` field in `SKILL.md` for the full trigger list.
 
