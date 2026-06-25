@@ -450,6 +450,8 @@ This is useful when you want to verify `MYTOKEN` scope without waiting for the n
 
 **Anti-pattern — `gh auth refresh -s workflow`**: do not try to add the `workflow` scope to an existing OAuth token from a non-interactive CLI session. The command will hang waiting for a browser confirmation. Either use the shortcut above (if the user is admin), or ask the user to add the scope via the GitHub web UI (`Settings → Developer settings → Personal access tokens → [token] → Edit scopes → Workflow ✓ → Update token`) and then continue.
 
+**Device-flow variant (works if the user is present)**: if the smoke test fails and the user can open a browser, run `gh auth refresh -h github.com -s workflow`. The CLI prints a one-time code and a `https://github.com/login/device` URL. After the user completes the device-flow authorization in the browser, the same `gh auth token` value will have the `workflow` scope for workflow-touching PRs. Note: `gh auth status` may continue to list the original scopes (`admin:public_key`, `gist`, `read:org`, `repo`) and omit `workflow` even though the token now works. Trust the smoke test (`gh pr merge <N> --auto --rebase` on an open workflow-touching Dependabot PR), not the scopes list.
+
 ### Pitfall 6 — `allow_auto_merge` is off at the repo level
 
 **Symptom**: `gh pr merge --auto` returns 422 / "Auto merge is not allowed for this repository". The auto-merge workflow succeeds (no error in the step), but the PR's `autoMergeRequest` stays null.
@@ -1073,6 +1075,49 @@ this revision):
   existing Pitfall 7's "Adjacent-line variant" section, plus a
   concrete one-liner in the worked example.
 
+After optimizing `cyanpotion/x8l` (the run that produced
+this revision):
+
+- **Pitfall 5 enriched** with the device-flow path for adding the
+  `workflow` scope to an existing `gh` OAuth token. Symptom: the
+  user-OAuth-token shortcut smoke test fails with
+  `without 'workflow' scope` even though the user is repo admin.
+  Cause: the token's `workflow` scope is not active for this
+  session. Fix: run `gh auth refresh -h github.com -s workflow`,
+  which enters GitHub device flow; the user opens
+  `https://github.com/login/device`, enters the one-time code, and
+  authorizes. After authorization the same `gh auth token` value
+  works for workflow-touching PRs. Important: `gh auth status` may
+  continue to list only `admin:public_key`, `gist`, `read:org`,
+  `repo` and omit `workflow` even though the token now passes the
+  smoke test. Trust the smoke test result, not the scopes list.
+- **Pitfall 5 user-OAuth-token shortcut verified on a repo under an
+  organization**. `cyanpotion/x8l` is owned by the `cyanpotion`
+  organization; the user is admin via org membership. The shortcut
+  still worked after the device-flow refresh, confirming the path
+  applies to org repos as well as personal repos.
+- **Verification check #11 observed in the wild**: calling
+  `gh pr merge --auto --rebase` on an open workflow-touching
+  Dependabot PR (e.g. `actions/checkout` 6→7) set
+  `autoMergeRequest.enabledBy.login: "XenoAmess"` and the PR
+  auto-merged via rebase within seconds of CI passing.
+- **Pitfall 14 rebase side-effect confirmed**: changing
+  `commit-message.prefix` from `build(deps)` to `ci` for
+  github-actions caused rebased open action-bump PRs to retitle
+  from `build(deps): bump actions/cache ...` to
+  `ci: bump actions/cache ...`. This is expected dependabot
+  behavior; notification filters keyed to the old prefix will stop
+  firing for those PRs.
+- **Migration push produced `UNKNOWN` before `BEHIND`/`BLOCKED`**:
+  immediately after setting branch protection and pushing the
+  workflow changes, open Dependabot PRs briefly showed
+  `mergeStateStatus: UNKNOWN` before settling to `BEHIND` or
+  `BLOCKED`. This is normal; GitHub recomputes merge state after
+  branch protection changes. A short wait plus a re-query confirms
+  the real state.
+- No count change. Pitfalls remain at fourteen; verification checks
+  remain at fourteen.
+
 ---
 
 ## Snags to watch for
@@ -1090,7 +1135,7 @@ this revision):
   | `BLOCKED` | a required review or check is missing | inspect the PR |
   | `DIRTY` | has a real merge conflict (not just "behind") | **for dependabot PRs: see Pitfall 10 — do NOT push a manual fix**, wait or `@dependabot rebase`. For human PRs: resolve the conflict. |
   | `UNSTABLE` | checks are still running or one just failed | wait or look at the failed check |
-  | `UNKNOWN` | GitHub is still computing the state | refresh in a few seconds |
+  | `UNKNOWN` | GitHub is still computing the state (common right after branch-protection changes or a migration push; wait a few seconds and re-query) | refresh in a few seconds |
 
 - **Old PRs don't pick up new auto-merge logic automatically**. If you change `auto-merge.yml` (e.g. switch from `target: minor` to native `gh pr merge --auto`), existing open Dependabot PRs will keep using the old workflow. To force them through the new logic, close and reopen:
 
