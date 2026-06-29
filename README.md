@@ -107,18 +107,18 @@ opencode scans each path in `skills.paths` for `**/SKILL.md` and loads the match
 - Keeping the entire procedure in one file keeps the agent's prompt focused, with no extra navigation.
 
 ```mermaid
-flowchart LR
-    User[User asks opencode] --> Config{skills.paths contains\nthis directory}
-    Config --> Load[Load SKILL.md\nas system context]
-    Load --> Inspect[1. Inspect repo state]
-    Inspect --> Workflow[2. Create/update\nauto-merge.yml]
-    Workflow --> Trigger[3. Fix CI triggers]
-    Trigger --> Flag[4. Enable allow_auto_merge]
-    Flag --> Branch[5. Configure branch\nprotection]
-    Branch --> Dependabot[6. Harden\ndependabot.yml]
-    Dependabot --> Verify[7. Verify with\ndiagnostics]
-    Verify --> Notes[8a. Write project\nnotes]
-    Verify --> Update[8b. Update this\nskill]
+flowchart TD
+    User["User asks opencode"] --> Config{"skills.paths contains this directory"}
+    Config -->|Yes| Load["Load SKILL.md as system context"]
+    Load --> Inspect["1. Inspect repo state"]
+    Inspect --> Workflow["2. Create/update auto-merge.yml"]
+    Workflow --> Trigger["3. Fix CI triggers"]
+    Trigger --> Flag["4. Enable allow_auto_merge"]
+    Flag --> Branch["5. Configure branch protection"]
+    Branch --> Dependabot["6. Harden dependabot.yml"]
+    Dependabot --> Verify["7. Verify with diagnostics"]
+    Verify --> Notes["8a. Write project notes"]
+    Verify --> Update["8b. Update this skill"]
 ```
 
 ```
