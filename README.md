@@ -43,15 +43,15 @@ Default merge policy:
 
 ```mermaid
 flowchart TD
-    PR[Dependabot PR opened] --> Author{Author login matches<br/>dependabot[bot] or app/dependabot?}
-    Author -->|No| Ignore[Ignore]
-    Author -->|Yes| Meta[Read dependabot metadata]
-    Meta --> Type{Update type?}
-    Type -->|semver-patch| Merge[Approve + enable auto-merge]
+    PR["Dependabot PR opened"] --> Author{"Author login matches<br/>dependabot[bot] or app/dependabot?"}
+    Author -->|No| Ignore["Ignore"]
+    Author -->|Yes| Meta["Read dependabot metadata"]
+    Meta --> Type{"Update type?"}
+    Type -->|semver-patch| Merge["Approve + enable auto-merge"]
     Type -->|semver-minor| Merge
-    Type -->|semver-major| Ecosystem{Head ref prefix?}
-    Ecosystem -->|dependabot/github_actions/*| Merge
-    Ecosystem -->|other| Human[Leave for human review]
+    Type -->|semver-major| Ecosystem{"Head ref prefix?"}
+    Ecosystem -->|github_actions| Merge
+    Ecosystem -->|other| Human["Leave for human review"]
     Type -->|other| Human
 ```
 
