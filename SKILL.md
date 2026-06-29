@@ -81,12 +81,13 @@ Before changing anything, gather context. Do not skip these.
    ```bash
    gh pr list --state open --json number,title,headRefName,mergeStateStatus,author
    ```
-   **Also note the `author.login`** — GitHub migrated Dependabot in 2024. New PRs are authored by `app/dependabot`; legacy PRs (and any in repos that haven't migrated) are authored by `dependabot[bot]`. Your auto-merge workflow's `if:` line must match the one the repo actually uses — see Pitfall 8.
+    **Also note the `author.login`** — GitHub migrated Dependabot in 2024. New PRs are authored by `app/dependabot`; legacy PRs (and any in repos that haven't migrated) are authored by `dependabot[bot]`. Your auto-merge workflow's `if:` line must match the one the repo actually uses — see Pitfall 8.
 4. **Read the actual check names** that GitHub is generating, not what you assume. See Pitfall 3.
-5. **Inventory available tokens**:
+5. **Inventory available tokens and verify the correct secret namespace**:
    ```bash
-   gh secret list
-   gh auth token | cut -c1-10   # check the prefix — gho_ (OAuth) vs ghp_ (classic PAT) vs github_pat_ (fine-grained)
+   gh secret list                  # actions secrets only
+   gh secret list --app dependabot # dependabot secrets (often the real problem)
+   gh auth token | cut -c1-10      # check the prefix — gho_ (OAuth) vs ghp_ (classic PAT) vs github_pat_ (fine-grained)
    ```
 
    **Two paths, pick the easier one**:
@@ -308,7 +309,7 @@ SSH uses your local SSH key and is not subject to the `workflow` OAuth scope res
 Auto-merge works without touching `dependabot.yml`, but the user will still drown in noise unless you also do these three things. Each one collapses PR *churn* or clarifies intent:
 
 1. **Weekly schedule, not daily.** `interval: daily` produces a PR per bump per day; `weekly` produces one batched bump on a predictable day.
-2. **`open-pull-requests-limit` of 5–20.** Default is 5. `100` is a foot-gun — see Snags.
+2. **`open-pull-requests-limit` of 5–20.** Default is 5. `100` is a foot-gun — it lets Dependabot open far more PRs than the auto-merge pipeline can drain, which increases noise and the `BEHIND` rebase race (Pitfall 7). Pick a number your CI matrix can actually clear in a weekly cycle: `10` for the main maven root, `5` for smaller ecosystems. See Snags.
 3. **`commit-message.prefix` and `labels`** so the auto-merge workflow (and humans) can identify dependabot PRs at a glance.
 
 **Do not** add a `groups:` block. Grouping — particularly `patterns: ["*"]` — collapses N unrelated dependency bumps into a single multi-hundred-line PR. When that PR fails CI, you cannot tell which bump caused it; when it passes, the diff is too large to review in one sitting. Major-version PRs in particular become unreviewable — the auto-merge policy in Step 1 says "do not auto-merge major", so the giant PR sits open until a human can pick it apart. The default behaviour (one PR per dependency per cycle) keeps each diff small enough to read, bisect and revert in isolation, at the cost of a higher PR count. That trade-off is the right one. See Pitfall 13.
@@ -370,7 +371,7 @@ After all fifteen Verification checks pass, before reporting success. This step 
 
 ## Pitfalls (read these before declaring success)
 
-These are the ten things that have actually broken in production. Re-check each one before finishing.
+These are the things that have actually broken in production. Re-check each one before finishing.
 
 ### Pitfall 1 — Major version updates never merge
 
@@ -428,17 +429,19 @@ If you see zero `pull_request` rows among the last 20 runs, your CI is not runni
 
 **Cause**: GitHub restricts `GITHUB_TOKEN` on `pull_request` events from writing to `.github/workflows/**`. Any PR that bumps an action version (i.e. virtually all `dependabot/github_actions/*` PRs) hits this.
 
-**Fix**: Use a repo PAT with `repo` + `workflow` scope for the `gh pr review` and `gh pr merge` steps. `fetch-metadata` is read-only and can keep using `GITHUB_TOKEN`. Configure via `gh secret set MYTOKEN` (use whatever name you want; remember the case).
+**Fix**: Use a repo PAT with `repo` + `workflow` scope for the `gh pr review` and `gh pr merge` steps. `fetch-metadata` is read-only and can keep using `GITHUB_TOKEN`. Configure via `gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"` (use whatever name you want; remember the case and the `--app dependabot` namespace).
 
 **Diagnostic**: If you're not sure which token the action is using, check the secret name. `${{ secrets.mytoken }}` (lowercase) and `${{ secrets.MYTOKEN }}` (uppercase) are different secrets — names are case-sensitive. An undefined secret silently falls back to `GITHUB_TOKEN` and produces this exact error.
 
-**Empty-secret detection in the workflow log**: when the secret exists in the repo's secret list but holds no value, the workflow log shows `GH_TOKEN: ` (truly empty — colon followed by nothing), not `GH_TOKEN: ***` (masked). The trailing colon with no asterisks is the giveaway. The `gh pr review` step then errors with `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable`. Fix: `gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"`. To inspect, run `gh run view <id> --log-failed` and look at the env block of the failing step.
+**The `--app dependabot` requirement**: Even if you set a secret with the right value and the right scope, a dependabot-triggered workflow run can only read it when the secret is in the **dependabot** namespace. `gh secret set MYTOKEN` (without `--app`) writes to the actions namespace; the runner on a dependabot PR will see an empty value. See Pitfall 16 for the exact symptoms and fix.
 
-**Shortcut — user OAuth token, no separate PAT needed**: If the user invoking this skill is the repo admin and already has `gh` authenticated, you do not need a separate PAT. A user OAuth token (`gho_*` prefix) has implicit `workflow` scope for repos where the user is admin — it can approve and enable auto-merge on PRs that modify workflow files. Use it directly:
+**Empty-secret detection in the workflow log**: when the secret exists in the repo's secret list but holds no value, the workflow log shows `GH_TOKEN: ` (truly empty — colon followed by nothing), not `GH_TOKEN: ***` (masked). The trailing colon with no asterisks is the giveaway. The `gh pr review` step then errors with `gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable`. Fix: `gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"`. To inspect, run `gh run view <id> --log-failed` and look at the env block of the failing step.
+
+**Shortcut — user OAuth token, no separate PAT needed**: If the user invoking this skill is the repo admin and already has `gh` authenticated, you do not need a separate PAT. A user OAuth token (`gho_*` prefix) has implicit `workflow` scope for repos where the user is admin — it can approve and enable auto-merge on PRs that modify workflow files. Use it directly, and store it in the **dependabot** namespace so dependabot-triggered workflow runs can read it:
 
 ```bash
 TOKEN=$(gh auth token)
-gh secret set MYTOKEN --repo <owner>/<repo> --body "$TOKEN"
+gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"
 ```
 
 Verify the scope with a smoke test on any open workflow-touching Dependabot PR:
