@@ -41,6 +41,20 @@ Default merge policy:
 | `semver-major` | other (e.g. `dependabot/maven/*`) | human review |
 | other | any | human review |
 
+```mermaid
+flowchart TD
+    PR[Dependabot PR opened] --> Author{Author login matches<br/>dependabot[bot] or app/dependabot?}
+    Author -->|No| Ignore[Ignore]
+    Author -->|Yes| Meta[Read dependabot metadata]
+    Meta --> Type{Update type?}
+    Type -->|semver-patch| Merge[Approve + enable auto-merge]
+    Type -->|semver-minor| Merge
+    Type -->|semver-major| Ecosystem{Head ref prefix?}
+    Ecosystem -->|dependabot/github_actions/*| Merge
+    Ecosystem -->|other| Human[Leave for human review]
+    Type -->|other| Human
+```
+
 Rationale: GitHub Actions major versions are usually just Node runtime bumps; Maven majors can break the build. You can adapt the table per repo.
 
 ---
@@ -92,6 +106,21 @@ opencode scans each path in `skills.paths` for `**/SKILL.md` and loads the match
 - `README.md` is human documentation; opencode does not read it automatically.
 - Keeping the entire procedure in one file keeps the agent's prompt focused, with no extra navigation.
 
+```mermaid
+flowchart LR
+    User[User asks opencode] --> Config{skills.paths contains\nthis directory}
+    Config --> Load[Load SKILL.md\nas system context]
+    Load --> Inspect[1. Inspect repo state]
+    Inspect --> Workflow[2. Create/update\nauto-merge.yml]
+    Workflow --> Trigger[3. Fix CI triggers]
+    Trigger --> Flag[4. Enable allow_auto_merge]
+    Flag --> Branch[5. Configure branch\nprotection]
+    Branch --> Dependabot[6. Harden\ndependabot.yml]
+    Dependabot --> Verify[7. Verify with\ndiagnostics]
+    Verify --> Notes[8a. Write project\nnotes]
+    Verify --> Update[8b. Update this\nskill]
+```
+
 ```
 dependabot-automerge-skill/
 ├── SKILL.md   # loaded by opencode
@@ -109,6 +138,28 @@ After a successful run the skill:
 3. Commits the skill changes locally (no remote push — the skill is loaded from a local path).
 
 The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections in `SKILL.md` for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`).
+
+---
+
+## Troubleshooting at a glance
+
+When a Dependabot PR is not merging, the skill follows this decision tree:
+
+```mermaid
+flowchart TD
+    A[PR not merging] --> B{auto-merge.yml workflow ran?}
+    B -->|No| C[Check the if: condition matches the PR author login]
+    B -->|Yes, all green| D{autoMergeRequest set?}
+    D -->|No| E{allow_auto_merge true?}
+    E -->|No| F[Enable repo setting]
+    E -->|Yes| G[Check MYTOKEN scope and namespace --app dependabot]
+    D -->|Yes| H{mergeStateStatus?}
+    H -->|BLOCKED| I[Check required check names against GraphQL]
+    H -->|BEHIND| J[Comment @dependabot rebase]
+    H -->|DIRTY| K[Wait, or @dependabot recreate]
+```
+
+The detailed symptoms, causes, and fixes for each branch are in the Pitfalls section of `SKILL.md`.
 
 ---
 
