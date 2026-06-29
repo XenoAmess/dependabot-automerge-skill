@@ -1,5 +1,7 @@
 # dependabot-automerge-skill
 
+> **English** | [简体中文](README.zh.md)
+
 An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository.
 
 It is built from real incident post-mortems: every "Pitfall" in `SKILL.md` is something that has actually broken in production. The skill is also self-improving — after each successful run it writes a per-project notes file and folds what it learned back into `SKILL.md`.
