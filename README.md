@@ -179,4 +179,4 @@ When editing, keep the same style: concrete symptom → cause → fix → diagno
 
 ## License
 
-Same as the originating repo (`java_pojo_generator`, MIT).
+Apache License 2.0. See [LICENSE](LICENSE).

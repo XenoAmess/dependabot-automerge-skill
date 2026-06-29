@@ -179,4 +179,4 @@ flowchart TD
 
 ## 许可证
 
-与源仓库（`java_pojo_generator`，MIT）一致。
+Apache License 2.0。详见 [LICENSE](LICENSE)。
