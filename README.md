@@ -72,7 +72,7 @@ The skill activates on Dependabot / auto-merge problems. Common triggers include
 | CI gating | "CI looks like it's running but isn't gating the PR", "branch protection required status check" |
 | Token / permissions | "auto-merge returns 422", "MYTOKEN secret is set but auto-merge still fails", "actions secret vs dependabot secret" |
 | Workflow issues | "auto-merge workflow never runs", "I changed auto-merge.yml and nothing happened" |
-| Dependabot quirks | "app/dependabot vs dependabot[bot]", "dependabot grouped my major upgrades into one huge PR" |
+| Dependabot quirks | "app/dependabot vs dependabot[bot]", "dependabot grouped my major upgrades into one huge PR", "dependabot labels could not be found / create missing labels", "my dependabot is configured but no PRs appear" |
 | Edge cases | "no open dependabot PRs but I still want to verify MYTOKEN scope", "local clone is way behind origin and git status lies", "I added github-actions to dependabot.yml and now 4 PRs opened at once and are racing" |
 
 See the `description` field in `SKILL.md` for the complete trigger list.

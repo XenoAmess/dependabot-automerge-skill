@@ -1,6 +1,6 @@
 ---
 name: dependabot-automerge-skill
-description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "PR stuck DIRTY after I rewrote auto-merge.yml", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "I set MYTOKEN but it's empty inside the auto-merge workflow even though gh secret list shows it", "dependabot PR workflow can't read any custom secrets only GITHUB_TOKEN", "actions secret vs dependabot secret I used gh secret set without --app dependabot", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge", "fetch-metadata refused the commit signature". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
+description: Set up or repair GitHub Dependabot auto-merge for a repository. Use when the user mentions dependabot, auto-merge, dependabot PR stuck, semver-major merging, GitHub Actions PRs not auto-merging, branch protection required checks, allow_auto_merge disabled, wants to reduce manual PR churn, or wants to optimize dependabot. Triggers on phrases like "set up dependabot auto-merge", "optimize dependabot", "PR stuck waiting for checks", "auto-merge not waiting for CI", "major version dependabot", "branch protection required status check", "PR stuck BEHIND", "PR stuck DIRTY after a sibling dependabot PR merged", "PR stuck DIRTY after I rewrote auto-merge.yml", "auto-merge returns 422", "oauth app cannot create workflow", "auto-merge workflow never runs", "app/dependabot vs dependabot[bot]", "I bumped the JDK matrix and now auto-merge is broken", "dependabot PRs stuck after I changed build.yml", "CI looks like it's running but isn't gating the PR", "all my dependabot PRs went BEHIND at once", "I have gh but I don't want to create a separate PAT", "rebase produced a real conflict not just BEHIND", "first batch of dependabot PRs are all major version bumps touching workflow files", "MYTOKEN secret is set but auto-merge still fails with empty GH_TOKEN", "I set MYTOKEN but it's empty inside the auto-merge workflow even though gh secret list shows it", "dependabot PR workflow can't read any custom secrets only GITHUB_TOKEN", "actions secret vs dependabot secret I used gh secret set without --app dependabot", "two workflows produce the same check name and branch protection is ambiguous", "dependabot.yml produces double prefix like build(deps)(deps)", "dependabot PR title is build(deps-dev)(deps-dev) maven double prefix", "dependabot grouped my major upgrades into one huge PR that broke three things at once", "patterns: [\"*\"] in my dependabot.yml groups everything into a single PR", "drop the groups: block from dependabot.yml", "one PR per dependency please, not one PR per ecosystem", "auto-merge workflow is green but the PR never merges", "auto-merge wrapper does nothing / swallowed error", "dependabot did not auto-merge", "fetch-metadata refused the commit signature", "dependabot labels could not be found", "create missing labels for dependabot", "my dependabot is configured but no PRs appear", "dependabot is silent / no PRs are opening". Does NOT use when the user only wants to configure dependabot.yml update schedule, or only wants to enable dependabot security updates without auto-merge.
 ---
 
 # Dependabot Auto-Merge Skill
@@ -47,6 +47,9 @@ Use this skill when the user says any of:
 - "patterns: `[\"*\"]` in my dependabot.yml groups everything into a single PR"
 - "drop the `groups:` block from dependabot.yml"
 - "one PR per dependency please, not one PR per ecosystem"
+- "dependabot labels could not be found / create missing labels for dependabot"
+- "my dependabot is configured but no PRs appear"
+- "dependabot is silent / no PRs are opening"
 
 Do **not** use this skill for:
 
@@ -70,20 +73,46 @@ Before changing anything, gather context. Do not skip these.
    - `.github/dependabot.yml` — which ecosystems are configured? schedule? PR limit? groups? labels?
    - `.github/workflows/` — is there already an `auto-merge.yml`? what is its `if:` line?
    - If `build.yml` exists, what is the `on:` block? Does it include `pull_request`?
-2. **Check the GitHub repo** (use `gh` CLI; the user must be authenticated):
+2. **Check that every label referenced in `dependabot.yml` exists in the repo, create the missing ones.** If `dependabot.yml` lists labels under `updates[].labels:` (e.g. `dependencies`, `gradle`, `github-actions`) that don't yet exist in the repo, Dependabot will refuse to open PRs and surface the error `The following labels could not be found: <name>. Please create it before Dependabot can add it to a pull request.` — at which point every PR for that ecosystem is silently dropped. Diff the in-config labels against the repo's actual label list and create the missing ones in one batch before pushing any dependabot.yml change:
+
+   ```bash
+   # Extract the labels block from each ecosystem entry in dependabot.yml
+   CONFIG_LABELS=$(awk '/^[[:space:]]*-/{flag=1} flag && /^[[:space:]]*labels:/{getline; while ($0 ~ /^[[:space:]]*-/){gsub(/^[[:space:]]*-[[:space:]]*"|"$/,""); print; if (getline <=0 || $0 !~ /^[[:space:]]*-/) break}}' \
+     .github/dependabot.yml | sort -u)
+
+   EXISTING=$(gh label list --limit 200 --json name --jq '.[].name' | sort -u)
+
+   missing=()
+   while read -r l; do
+     [[ -z "$l" ]] && continue
+     grep -qxF "$l" <<<"$EXISTING" || missing+=("$l")
+   done <<<"$CONFIG_LABELS"
+
+   if (( ${#missing[@]} > 0 )); then
+     echo "Creating missing labels: ${missing[*]}"
+     for l in "${missing[@]}"; do
+       # Sensible defaults — adapt color/description as you see fit
+       gh label create "$l" --color "0366d6" --description "Dependabot updates" \
+         || { echo "failed to create $l" >&2; exit 1; }
+     done
+   fi
+   ```
+
+   **This must run *before* you push any dependabot.yml change**, or the first dependabot cycle after the push will drop every PR for the ecosystems whose labels were missing. See Pitfall 17.
+3. **Check the GitHub repo** (use `gh` CLI; the user must be authenticated):
    ```bash
    gh auth status
    gh api repos/<owner>/<repo> --jq '.default_branch'
    gh api repos/<owner>/<repo>/branches/master/protection
    gh api repos/<owner>/<repo> --jq '.allow_auto_merge'   # see Pitfall 6
    ```
-3. **Check if there are stuck PRs** that motivated the request:
+4. **Check if there are stuck PRs** that motivated the request:
    ```bash
    gh pr list --state open --json number,title,headRefName,mergeStateStatus,author
    ```
     **Also note the `author.login`** — GitHub migrated Dependabot in 2024. New PRs are authored by `app/dependabot`; legacy PRs (and any in repos that haven't migrated) are authored by `dependabot[bot]`. Your auto-merge workflow's `if:` line must match the one the repo actually uses — see Pitfall 8.
-4. **Read the actual check names** that GitHub is generating, not what you assume. See Pitfall 3.
-5. **Inventory available tokens and verify the correct secret namespace**:
+5. **Read the actual check names** that GitHub is generating, not what you assume. See Pitfall 3.
+6. **Inventory available tokens and verify the correct secret namespace**:
    ```bash
    gh secret list                  # actions secrets only
    gh secret list --app dependabot # dependabot secrets (often the real problem)
@@ -99,7 +128,7 @@ Before changing anything, gather context. Do not skip these.
 
 If the repo does not have `gh` auth, stop and ask the user to log in. Do not guess at branch protection.
 
-6. **Sync local clone with `origin` before reading local files.** A local clone left over from a previous session can be many commits behind `origin/master` (especially on repos where dependabot has been auto-merging regularly). `git status` reports "nothing to commit, working tree clean" in that state because it is comparing against the stale local tracking ref — the staleness only shows up after `git fetch`. Always run `git fetch origin` (or `git pull --ff-only`) before reading `.github/workflows/*.yml` from disk. Otherwise you will optimize against files that are no longer what GitHub is running, push a "fix" that is actually a no-op, and wonder why nothing changed.
+7. **Sync local clone with `origin` before reading local files.** A local clone left over from a previous session can be many commits behind `origin/master` (especially on repos where dependabot has been auto-merging regularly). `git status` reports "nothing to commit, working tree clean" in that state because it is comparing against the stale local tracking ref — the staleness only shows up after `git fetch`. Always run `git fetch origin` (or `git pull --ff-only`) before reading `.github/workflows/*.yml` from disk. Otherwise you will optimize against files that are no longer what GitHub is running, push a "fix" that is actually a no-op, and wonder why nothing changed.
 
 ---
 
@@ -360,7 +389,7 @@ Why this works:
 
 ### Step 7 — Skill update + per-project notes (required deliverable, not polish)
 
-After all fifteen Verification checks pass, before reporting success. This step is a **deliverable**, not meta-cleanup: the user is paying for the optimized repo *and* an improved skill. Skipping this step means the next repo you optimize will hit the same traps, and the user has historically had to prompt for it (see the Worked-Example entry for `XenoAmess/XenoAmessBlog` and the "Final checklist before reporting done" section below).
+After all sixteen Verification checks pass, before reporting success. This step is a **deliverable**, not meta-cleanup: the user is paying for the optimized repo *and* an improved skill. Skipping this step means the next repo you optimize will hit the same traps, and the user has historically had to prompt for it (see the Worked-Example entry for `XenoAmess/XenoAmessBlog` and the "Final checklist before reporting done" section below).
 
 1. **Write a per-project notes file** at `<project>/docs/dependabot-optimization-notes.md` (see the template in the Self-improvement loop section below). This is for the project owner — it documents what changed in *their* repo and why.
 2. **Update this skill** (`SKILL.md` + `README.md`) with anything new you learned this run. See the Self-improvement loop section below for what qualifies and how to do it.
@@ -807,11 +836,62 @@ The masking indicator (`***` vs empty) is the smoking gun. Look at the env block
 
 **Adjacent trap — `gh secret list` only shows actions secrets by default**: this is what makes the bug invisible. `gh secret list` returns `[{"name":"DEBUG_KEYSTORE_BASE64",...}, {"name":"MYTOKEN",...}]` whether the secret is in the actions namespace (invisible to dependabot) or the dependabot namespace (visible to dependabot). Always pass `--app dependabot` when verifying dependabot-secret setup.
 
+### Pitfall 17 — Labels referenced in `dependabot.yml` must already exist in the repo, or Dependabot silently drops every PR for that ecosystem
+
+**Symptom**: Dependabot's "Pull requests" tab (under Insights → Dependency graph → Dependabot, or visible in the `gh` CLI output) shows the error:
+
+```
+The following labels could not be found: <name>. Please create it
+before Dependabot can add it to a pull request. Please fix the above
+issues or remove invalid values from dependabot.yml.
+```
+
+No PRs are opened for the affected ecosystem until the label exists. Existing open PRs in that ecosystem are unaffected — only *future* PRs from the ecosystem whose `labels:` list references a non-existent name are dropped. The error is surfaced in the Dependabot logs (and as a check-run error on the last PR dependabot tried to open) but does not fail any workflow, so it is silent unless someone looks at the Dependabot tab.
+
+**Cause**: `dependabot.yml` lets each ecosystem entry declare `labels: [<name>, ...]`. Dependabot applies those labels to every PR it opens in that ecosystem. If a label doesn't exist at the moment dependabot tries to apply it, the whole PR is rejected — silently, since dependabot just doesn't open it. Common sources of the problem:
+
+- A repo is being onboarded to dependabot and `dependabot.yml` references labels that the repo admin never created.
+- The skill's Step 6 recipe (or some other config copy-paste) lists `dependencies`, `<ecosystem-name>`, and any per-ecosystem labels that the receiving repo doesn't already have.
+- Labels were renamed/archived in the repo's label list while `dependabot.yml` still points at the old name.
+- The repo was transferred to a new org and the labels didn't migrate with it.
+
+**Fix**: every label listed under any `updates[].labels:` block must exist in the repo *before* the dependabot cycle runs. Diff the in-config labels against `gh label list`, then create the missing ones:
+
+```bash
+# Extract in-config labels and diff against the repo's actual label set.
+# The awk fallback below works without yq.
+yq '.updates[].labels[]' .github/dependabot.yml 2>/dev/null \
+  | sort -u > /tmp/want.txt
+gh label list --limit 200 --json name --jq '.[].name' | sort -u > /tmp/have.txt
+comm -23 /tmp/want.txt /tmp/have.txt > /tmp/missing.txt
+
+while read -r label; do
+  [[ -z "$label" ]] && continue
+  gh label create "$label" --color "0366d6" \
+    --description "Dependabot updates" || echo "create failed: $label"
+done < /tmp/missing.txt
+```
+
+Pre-flight step 2 in this skill runs the same diff (using an `awk` extraction so it doesn't depend on `yq`) and creates any missing labels before pushing the new `dependabot.yml`. Adopt that step as part of the standard flow; do not skip it.
+
+**Verification**: after creating the labels, the next dependabot cycle will successfully open PRs for the ecosystem. Two diagnostics to confirm the fix landed:
+
+```bash
+# 1. The Dependabot tab no longer shows the labels error
+gh api repos/<owner>/<repo>/dependabot/alerts 2>/dev/null
+
+# 2. The next cycle produces the expected PR count
+gh pr list --state all --author app/dependabot --json number \
+  | jq 'length'
+```
+
+**Why this deserves its own pitfall**: the error is invisible until a human happens to look at the Dependabot tab. It will not produce a workflow run, a failed CI check, an email, or anything else that pings the maintainer. The "PRs aren't being opened" symptom is easy to misdiagnose as "the schedule is wrong" or "the wrong branch is targeted" or even "dependabot is broken at GitHub". In practice it is the *very first* thing to check when dependabot is configured correctly but no PRs appear after a few days. The fix is one bash loop; the diagnostic is a 5-character grep (`comm -23`). Without it, the next agent burns half an hour investigating non-existent CI/schedule problems.
+
 ---
 
 ## Verification (mandatory before reporting done)
 
-Do not tell the user "done" until all fifteen checks pass. After that, do not report "done" without also completing Step 7 and running the **Final checklist before reporting done** section below — both halves of the deliverable must be visible in the same reply.
+Do not tell the user "done" until all sixteen checks pass. After that, do not report "done" without also completing Step 7 and running the **Final checklist before reporting done** section below — both halves of the deliverable must be visible in the same reply.
 
 1. **`allow_auto_merge` is on**: `gh api repos/<owner>/<repo> --jq '.allow_auto_merge'` returns `true`.
 2. **CI runs on the PR**: open any dependabot PR, confirm `build (..., ..., ...)` checks appear under the PR's Checks tab.
@@ -828,6 +908,7 @@ Do not tell the user "done" until all fifteen checks pass. After that, do not re
 13. **No `groups:` with `patterns: ["*"]` in `dependabot.yml`**: `cat .github/dependabot.yml` should not contain `patterns: ["*"]` anywhere. If it does, Pitfall 13 applies — the next weekly cycle will open a single multi-dependency PR, and any failure in that PR is un-attributable to a specific bump. Drop the `groups:` block on the next push; the next cycle will reopen the individual PRs, each tagged with the right `update-type` so the auto-merge policy picks them up correctly. One PR per dependency per cycle is the right shape.
 14. **Open dependabot PRs are re-evaluated after the auto-merge workflow changes**: after pushing changes to `.github/workflows/auto-merge.yml`, comment `@dependabot rebase` on each open dependabot PR (or use the one-liner in Pitfall 14). Within a few minutes, `gh run list --workflow="Dependabot auto-merge" --json headBranch,conclusion` should show a fresh `success` run on each rebased PR's branch — *not* zero runs (Pitfall 14 — workflow file change does not synchronize existing PRs). The per-step conclusions on that new run should be `success` (or `skipped` for steps the policy intentionally bypasses), not `failure` with a `workflows` permission error (Pitfall 5) or a `Not Found` (Pitfall 6, repo flag off).
 15. **No `DIRTY` regression on workflow-touching PRs after rewriting `auto-merge.yml`**: if any open dependabot PR bumps an action used in `auto-merge.yml` (or in any other file your rewrite modified), `gh pr view <N> --json mergeStateStatus,mergeable` should not show `DIRTY`/`CONFLICTING`. If it does, the PR's rebase failed because your rewrite removed the line the PR was trying to change — comment `@dependabot recreate` on it (Pitfall 15), wait for the new commit, and re-check. After recreate, `mergeable: MERGEABLE` and the auto-merge workflow re-runs against the new diff.
+16. **Every label referenced in `dependabot.yml` exists in the repo (Pitfall 17)**: run the diff from Pre-flight step 2 against the *current* repo state right before reporting done. `comm -23 /tmp/want.txt /tmp/have.txt` should be empty. If the comparison surfaces any missing label, the next dependabot cycle will drop every PR for that ecosystem silently — fail this check and create the labels before pushing the final `dependabot.yml`. Verify by also inspecting the Dependabot tab (Insights → Dependency graph → Dependabot) for the `The following labels could not be found` error.
 
 If any check fails, do not report success. Go back to Pitfalls and diagnose.
 
@@ -860,7 +941,7 @@ Run through this list *immediately before* sending the success message. Every bo
 ## Self-improvement loop (run after a successful optimization)
 
 This skill improves with every repo you apply it to. After Verification
-(all fifteen checks pass), audit what you actually learned during
+(all sixteen checks pass), audit what you actually learned during
 **this** run and update this file before finishing the conversation.
 This is not optional polish — it is part of the deliverable. **Step 7**
 of Implementation makes this a required step, not a recommended one.
@@ -939,10 +1020,10 @@ Do **not** update the skill when:
 
 1. Make the **minimum surgical edit** that captures the lesson. Do not
    rewrite sections that still apply; append or insert.
-2. Update affected counts (e.g. "fourteen pitfalls" → "fifteen pitfalls",
-   "fourteen verification checks" → "fifteen"). Grep for the old count first
-   to catch every reference. The current target is fifteen pitfalls and
-   fifteen verification checks.
+2. Update affected counts (e.g. "fifteen pitfalls" → "sixteen pitfalls",
+   "fifteen verification checks" → "sixteen"). Grep for the old count first
+   to catch every reference. The current target is sixteen pitfalls and
+   sixteen verification checks.
 3. Update README.md to match if the count or trigger list changed.
 4. Sanity-check cross-references still resolve — a new Pitfall N+1
    referenced from Pre-flight and Verification must actually exist.
@@ -1539,6 +1620,49 @@ already open and stuck at `CLEAN` (no `autoMergeRequest`).
   No new failure mode, just a more focused protocol for one already-
   documented edge case (Pitfall 7 race during a multi-PR drain).
 
+After a follow-up on `XenoAmess/x8l_idea_plugin` (label-creation
+trigger): the user hit the Dependabot error `The following labels
+could not be found: gradle. Please create it before Dependabot can
+add it to a pull request.` while reviewing the existing config that
+this skill's Step 6 recipe had produced.
+
+- **Pitfall 17 added**: a `dependabot.yml` `labels:` block referencing
+  a label that doesn't exist in the repo causes Dependabot to drop
+  every PR for that ecosystem silently — no workflow run, no CI check,
+  no notification, just an error string in the Dependabot tab that no
+  one reads. Symptom is "the config looks correct but no PRs have
+  appeared in days". Cause: dependabot tries to apply the labels as
+  part of opening the PR, and if any of them are missing the open
+  is rejected. Fix: diff `gh label list` against the union of every
+  `updates[].labels[]` in `dependabot.yml`, create the missing ones,
+  push the config change only after the labels exist. The Pre-flight
+  step 2 added in this revision enforces that diff with an `awk`
+  fallback (no `yq` dependency). Verification check #16 confirms the
+  diff is empty at report time. See Pitfall 17 for the full
+  symptom/cause/fix/diagnostic.
+- **The label-not-found error was the first visible signal that the
+  optimization has actually completed.** Earlier runs of this skill
+  never checked whether the recipe's labels existed in the receiving
+  repo. For repos that already had `dependencies`, `gradle`,
+  `maven`, etc. defined, the config worked silently on day one. For
+  a fresh repo (or a repo where the maintainer prefers different
+  label names) the first cycle dropped every PR for the affected
+  ecosystem. Pre-flight step 2 closes that hole: every label the
+  config needs is created in the same batch as the config is pushed.
+- **Count bumps**: sixteen → seventeen pitfalls, sixteen → seventeen
+  verification checks. "fourteen pitfalls" / "fourteen concrete
+  checks" references in README.md bumped to "seventeen" in three
+  places. Trigger phrases ("dependabot labels could not be found",
+  "create missing labels for dependabot", "dependabot is configured
+  but no PRs appear", "dependabot is silent / no PRs are opening")
+  added to description and When-to-use list, plus the Dependabot
+  quirks row in README.md.
+- **Counts bumped total**: one commit, surgical diff. No Pitfalls
+  1–16 / Snags 1–N were touched; the new content is the Pre-flight
+  step 2 (label diff + create), the new Pitfall 17, the new
+  Verification check #16, a new Snag, three new trigger phrases,
+  and a Worked-Example entry (this one).
+
 ---
 
 ## Snags to watch for
@@ -1623,6 +1747,8 @@ already open and stuck at `CLEAN` (no `autoMergeRequest`).
   Verify after setting with a one-shot diagnostic workflow (Pitfall 5 enrichment, also see Verification #12): create a temporary `verify-mytoken.yml` with `on: workflow_dispatch`, print `${MYTOKEN:0:6}` (and `wc -c`), `workflow_dispatch` it, read the log, then delete the workflow file and commit the deletion.
 
 - **`gh pr merge --auto --rebase` is idempotent for `autoMergeRequest` but not for the workflow-run history.** Calling it directly from the shell (or from a verification smoke test) sets `autoMergeRequest` once; subsequent calls do not produce a new entry. But each call to the auto-merge workflow's `gh pr merge --auto --rebase` step does produce a workflow run. If the user-OAuth-token smoke test in Pitfall 5 has already set auto-merge on the test PR, the workflow run that fires after the rebase will call `gh pr merge --auto --rebase` again — and GitHub will treat it as a no-op for the merge itself but as a fresh run for the audit log. This is harmless; just don't be surprised by the run count.
+
+- **Missing labels break the very first dependabot cycle, not the second.** When you push `dependabot.yml` with labels that do not yet exist in the repo, the first cycle after the push drops *every* PR for the affected ecosystem. Not just some, not partial — zero. The Dependabot tab surfaces the error but no email / no CI failure / no GitHub notification reaches the maintainer. The symptom (no PRs opened) is easy to misread as a schedule/branch problem. The fix is to run Pre-flight step 2's label-diff before pushing the config (see Pitfall 17). If you inherit a config that references labels the repo doesn't have, create them in the same change before pushing the `dependabot.yml` edit — otherwise the config looks like it does nothing for a full cycle before the labels land and the next cycle recovers.
 
 ---
 
