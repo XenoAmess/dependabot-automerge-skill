@@ -1,67 +1,71 @@
 # dependabot-automerge-skill
 
-An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository. It is built from real incident post-mortems — the "Pitfalls" sections are the things that have actually broken in production. The skill is self-improving: after every successful run, it writes a per-project notes file and updates itself with what it learned.
+An [opencode](https://opencode.ai) skill that configures GitHub Dependabot auto-merge for any repository.
+
+It is built from real incident post-mortems: every "Pitfall" in `SKILL.md` is something that has actually broken in production. The skill is also self-improving — after each successful run it writes a per-project notes file and folds what it learned back into `SKILL.md`.
+
+---
 
 ## What it does
 
 When triggered, the skill:
 
-1. Inspects the current repo state (dependabot.yml, workflows, branch protection, open Dependabot PRs **and their author login**, available tokens, `allow_auto_merge` flag).
-2. Creates / updates `.github/workflows/auto-merge.yml` with the correct decision policy. Uses a user OAuth token (admin shortcut) or a separate PAT for the merge step (required for PRs that touch `.github/workflows/`). Matches both `app/dependabot` and `dependabot[bot]` logins.
-3. Adjusts the CI workflow (`build.yml`) so it runs on `pull_request` and does not double-trigger on `push`.
-4. Enables `allow_auto_merge` at the repo level.
-5. Sets branch protection with the **actual** required check name(s) — discovered from GraphQL, not guessed.
-6. Hardens `dependabot.yml` (weekly schedule, grouped updates, sensible PR limit, labels) so the user doesn't drown in noise.
-7. Verifies the setup against concrete checks before reporting success, including a run-log diagnostic for the easy-to-miss `allow_auto_merge: false` failure mode, an empty-`MYTOKEN` detection diagnostic for the silent-failure case (with the `***` vs empty tell — Pitfall 16), a `pull_request`-vs-`push` event diagnostic for the "CI looks like it works but isn't gating" anti-pattern, a duplicate-check-name detection diagnostic for repos with split CI workflows, a `grep -F 'patterns: ["*"]' .github/dependabot.yml` line that catches the "one giant grouped PR is hard to debug" anti-pattern, a `@dependabot rebase` smoke test that catches the "I pushed a fix but my existing PRs are still stuck" trap, and a post-rewrite `mergeStateStatus` check that catches the "I rewrote auto-merge.yml and now the open workflow-bump PR is DIRTY" anti-pattern.
-8. **Self-improvement**: writes `<project>/docs/dependabot-optimization-notes.md` and updates this skill with anything new it learned. Both are required deliverables, not optional polish.
+1. **Inspects** the current repo state:
+   - `.github/dependabot.yml`
+   - existing workflows (`auto-merge.yml`, `build.yml`, etc.)
+   - branch protection and required checks
+   - open Dependabot PRs and their author login (`app/dependabot` vs `dependabot[bot]`)
+   - available tokens and the `allow_auto_merge` repo flag
+2. **Creates / updates** `.github/workflows/auto-merge.yml` with a safe merge policy.
+3. **Fixes the CI trigger** so `build.yml` runs on `pull_request` and does not double-fire on `push`.
+4. **Enables** `allow_auto_merge` at the repo level.
+5. **Configures** branch protection with the *actual* required check names, discovered via GitHub GraphQL rather than guessed.
+6. **Hardens** `dependabot.yml` (weekly schedule, sensible PR limits, labels — no catch-all `groups:`).
+7. **Verifies** the setup with concrete diagnostics before reporting success:
+   - `allow_auto_merge: false` detection
+   - empty / unmasked `MYTOKEN` detection (`GH_TOKEN:` vs `GH_TOKEN: ***`)
+   - `pull_request` vs `push` event gating check
+   - duplicate check-name detection for split CI workflows
+   - `patterns: ["*"]` anti-pattern check in `dependabot.yml`
+   - `@dependabot rebase` smoke test for stuck existing PRs
+   - post-rewrite `mergeStateStatus` check for `DIRTY` workflow-bump PRs
+8. **Self-improves**: writes `<project>/docs/dependabot-optimization-notes.md` and updates this skill.
 
-## When the skill triggers
+Default merge policy:
 
-It activates on phrases like:
+| Update type | Head ref | Action |
+| --- | --- | --- |
+| `semver-patch` | any | auto-merge |
+| `semver-minor` | any | auto-merge |
+| `semver-major` | `dependabot/github_actions/*` | auto-merge |
+| `semver-major` | other (e.g. `dependabot/maven/*`) | human review |
+| other | any | human review |
 
-- "set up dependabot auto-merge"
-- "optimize dependabot"
-- "PR stuck waiting for checks"
-- "auto-merge skipped CI"
-- "auto-merge workflow is green but the PR never merges / nothing happens"
-- "branch protection required status check"
-- "I want major version Dependabot PRs to merge automatically"
-- "PR stuck at `BEHIND`"
-- "PR stuck at `DIRTY` (not BEHIND) after a sibling dependabot PR merged"
-- "`gh pr merge --auto` returns 422 / auto-merge not allowed"
-- "OAuth App cannot create or update workflow"
-- "I changed auto-merge.yml and nothing happened"
-- "auto-merge workflow never runs / always skipped"
-- "app/dependabot vs dependabot[bot]"
-- "I bumped the JDK matrix and now auto-merge is broken"
-- "dependabot PRs stuck after I changed build.yml"
-- "CI looks like it's running but isn't gating the PR"
-- "all my dependabot PRs went BEHIND at once"
-- "I have `gh` but I don't want to create a separate PAT"
-- "rebase produced a real conflict not just BEHIND"
-- "first batch of dependabot PRs are all major version bumps touching workflow files"
-- "MYTOKEN is set but auto-merge still fails with empty GH_TOKEN"
-- "I set MYTOKEN but it's empty inside the auto-merge workflow even though `gh secret list` shows it"
-- "dependabot PR workflow can't read any custom secrets, only GITHUB_TOKEN"
-- "actions secret vs dependabot secret — I used `gh secret set` without `--app dependabot`"
-- "two CI workflows produce the same `build (os, java)` check name"
-- "dependabot PR titles look like `build(deps)(deps): ...` with duplicated scope"
-- "dependabot PR title is `build(deps-dev)(deps-dev)` Maven double prefix"
-- "no open dependabot PRs but I still want to verify MYTOKEN scope"
-- "local clone is way behind origin and `git status` lies"
-- "dependabot grouped PR closed my individual PRs — should I worry?"
-- "dependabot grouped my major upgrades into one huge PR that broke three things at once"
-- "my github-actions PR titles are `build(deps)(deps): ...` instead of `ci: ...`"
-- "patterns: `[\"*\"]` in my dependabot.yml groups everything into a single PR"
-- "drop the `groups:` block from dependabot.yml"
-- "one PR per dependency please, not one PR per ecosystem"
-- "I added github-actions to dependabot.yml and now 4 PRs opened at once and are racing"
+Rationale: GitHub Actions major versions are usually just Node runtime bumps; Maven majors can break the build. You can adapt the table per repo.
 
-See the `description` field in `SKILL.md` for the full trigger list.
+---
 
-## How to use
+## When it triggers
 
-This is an external skill. Register it in your `opencode.json`:
+The skill activates on Dependabot / auto-merge problems. Common triggers include:
+
+| Category | Example phrases |
+| --- | --- |
+| Setup | "set up dependabot auto-merge", "optimize dependabot" |
+| PR stuck | "PR stuck waiting for checks", "PR stuck BEHIND", "PR stuck DIRTY" |
+| CI gating | "CI looks like it's running but isn't gating the PR", "branch protection required status check" |
+| Token / permissions | "auto-merge returns 422", "MYTOKEN secret is set but auto-merge still fails", "actions secret vs dependabot secret" |
+| Workflow issues | "auto-merge workflow never runs", "I changed auto-merge.yml and nothing happened" |
+| Dependabot quirks | "app/dependabot vs dependabot[bot]", "dependabot grouped my major upgrades into one huge PR" |
+| Edge cases | "no open dependabot PRs but I still want to verify MYTOKEN scope", "local clone is way behind origin and git status lies", "I added github-actions to dependabot.yml and now 4 PRs opened at once and are racing" |
+
+See the `description` field in `SKILL.md` for the complete trigger list.
+
+---
+
+## Quick start
+
+Register this directory as an external skill in your `opencode.json`:
 
 ```json
 {
@@ -72,25 +76,53 @@ This is an external skill. Register it in your `opencode.json`:
 }
 ```
 
-Restart opencode after adding the path. Then ask opencode to set up auto-merge for a repo.
+Restart opencode. Then ask it to set up auto-merge for a repo, for example:
 
-## Self-improving
+> "Set up dependabot auto-merge for my-java-project."
 
-The skill maintains a `## Self-improvement loop` section at the bottom of `SKILL.md` that **Step 7 of Implementation** invokes after every successful run. The loop writes a per-project notes file at `<project>/docs/dependabot-optimization-notes.md` (template in `SKILL.md`) and updates the skill with new pitfalls, snags, trigger phrases, and verification checks. The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`).
+opencode will load `SKILL.md` as system context and follow the strategy, pitfalls, and verification checklist inside.
 
-## Layout
+---
+
+## How it works under the hood
+
+opencode scans each path in `skills.paths` for `**/SKILL.md` and loads the matching file as system prompt context. That means:
+
+- `SKILL.md` is the actual skill — the strategy, pitfalls, and verification steps all live there.
+- `README.md` is human documentation; opencode does not read it automatically.
+- Keeping the entire procedure in one file keeps the agent's prompt focused, with no extra navigation.
 
 ```
 dependabot-automerge-skill/
-├── SKILL.md          # the skill — loaded by opencode
-└── README.md         # this file
+├── SKILL.md   # loaded by opencode
+└── README.md  # this file
 ```
 
-The skill itself is a single `SKILL.md` file. opencode scans for `**/SKILL.md` inside any directory listed under `skills.paths`, so this whole directory can be dropped in as-is.
+---
 
-## Why a single file?
+## Self-improvement loop
 
-opencode skills are markdown. They are loaded as system context for the agent. Putting the entire procedure in one file keeps the agent's prompt focused: it sees the strategy, all pitfalls (currently sixteen), and the verification checklist in one place, with no extra navigation.
+After a successful run the skill:
+
+1. Writes per-project notes to `<project>/docs/dependabot-optimization-notes.md`.
+2. Updates `SKILL.md` and `README.md` with new pitfalls, trigger phrases, or verification checks.
+3. Commits the skill changes locally (no remote push — the skill is loaded from a local path).
+
+The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections in `SKILL.md` for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`).
+
+---
+
+## Contributing
+
+The skill is a single Markdown file so changes stay reviewable in one diff:
+
+- **Bug / new pitfall you hit?** Add it to the Pitfalls section in `SKILL.md`, plus a diagnostic command and a fix.
+- **New trigger phrase users actually say?** Add it to both the `description` frontmatter and the "When to use" list.
+- **README only?** Formatting, examples, or clarifications are welcome here.
+
+When editing, keep the same style: concrete symptom → cause → fix → diagnostic command.
+
+---
 
 ## License
 
