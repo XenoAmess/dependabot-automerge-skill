@@ -1663,6 +1663,43 @@ this skill's Step 6 recipe had produced.
   Verification check #16, a new Snag, three new trigger phrases,
   and a Worked-Example entry (this one).
 
+After optimizing `XenoAmess/http-service-spliter` (the run that produced
+this revision): a Quarkus/Maven proxy service with an existing
+`dependabot.yml` (targeted `groups:` blocks for Quarkus, test, Maven
+plugins, GitHub Actions, and Docker) and an existing
+`dependabot-auto-merge.yml` that used a check-waiting wrapper plus
+title-grep for semver detection.
+
+- **Another wrapper variant observed: `lewagon/wait-on-check-action` +
+  title-grep policy detection.** The existing workflow hardcoded check
+  names (`build-native-qemu, build-jvm`) and parsed the PR title with
+  `grep -qiE` to skip "major" bumps. This is fragile in two ways: check
+  names drift when jobs are renamed (Pitfall 9), and title regexes miss
+  `semver-major` classifications that `dependabot/fetch-metadata`
+  reports reliably. The wrapper is also unnecessary — branch protection
+  + `gh pr merge --auto` already waits for required checks. Replaced
+  with `dependabot/fetch-metadata` + explicit `gh pr review --approve`
+  + `gh pr merge --auto --rebase` steps.
+- **`include: "scope"` collision confirmed across three ecosystems in
+  the same repo.** Maven, GitHub Actions, and Docker all used
+  `prefix: "build(deps)"` with `include: "scope"`, which would have
+  produced `build(deps)(deps): ...` titles. Dropped `include: "scope"`
+  everywhere and switched GitHub Actions to `prefix: "ci"`.
+- **Targeted `groups:` blocks are still `groups:`.** The config did not
+  use `patterns: ["*"]`, but every ecosystem still had a `groups:`
+  block bundling related updates (e.g. all Quarkus patch/minor bumps
+  into one PR). Dropped all groups per Pitfall 13 so the next cycle
+  opens one PR per dependency; the per-PR `update-type` metadata then
+  drives the auto-merge policy correctly.
+- **No open or closed Dependabot PRs available for end-to-end smoke
+  test.** Verification relied on static checks: `allow_auto_merge=true`,
+  labels created, `MYTOKEN` set in the Dependabot namespace, branch
+  protection contexts match job names, YAML parses. The first real
+  Dependabot PR will be the live smoke test for the OAuth-token-as-
+  `MYTOKEN` scope.
+- Counts unchanged: still seventeen pitfalls, seventeen verification
+  checks.
+
 ---
 
 ## Snags to watch for
