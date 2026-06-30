@@ -139,7 +139,7 @@ After a successful run the skill:
 2. Updates `SKILL.md` and `README.md` with new pitfalls, trigger phrases, or verification checks.
 3. Commits the skill changes locally (no remote push — the skill is loaded from a local path).
 
-The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections in `SKILL.md` for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`, `XenoAmess/http-service-spliter`).
+The skill's own git log is the audit trail of what was learned where — see the `### Worked example` subsections in `SKILL.md` for prior runs (`XenoAmess/docker-image-rebecca`, `XenoAmess/x8l_idea_plugin`, `cyanpotion/cyan_zip`, `XenoAmess/jcpp-maven-plugin`, `XenoAmess/evosuite`, `XenoAmess/XenoAmessBlogFramework`, `XenoAmess/XenoAmessBlog`, `XenoAmess-Auto/qr_code_simple`, `xenaomess-shade/shade_asm`, `XenoAmess/http-service-spliter`, `XenoAmess/hyperscan-java-native`).
 
 ---
 

@@ -1700,6 +1700,43 @@ title-grep for semver detection.
 - Counts unchanged: still seventeen pitfalls, seventeen verification
   checks.
 
+After optimizing `XenoAmess/hyperscan-java-native` (the run that produced
+this revision): a Maven-native JNI project with a heavy, multi-platform
+CI matrix and no pre-existing branch protection or auto-merge workflow.
+
+- **Branch protection created from scratch immediately put all open
+  Dependabot PRs into `UNKNOWN`/`BEHIND`.** The repo had 9 open maven
+  PRs and no protection at all. Setting protection with `strict: true`
+  made every PR out-of-date relative to the new main HEAD. After a brief
+  `UNKNOWN` state, they settled to `BEHIND`. The fix was a batch
+  `@dependabot rebase` comment on every open Dependabot PR; the
+  `update-branch` API would have been faster because it preserves
+  `autoMergeRequest`, but the rebase path was sufficient.
+- **Matrix `include:` entries produce check names with every included
+  key, not just declared axes.** The `build-native` job uses an
+  `include:` matrix with keys `os`, `runner`, and `platform`. The
+  resulting required check names are `Build native libs (linux,
+  ubuntu-24.04, linux-x86_64)` etc. — all three dimensions appear.
+  Guessing from the `strategy.matrix` declaration would have produced
+  the wrong strings for branch protection. The GraphQL check-name query
+  on the default-branch commit is the only reliable source.
+- **User-OAuth-token shortcut used again with no separate PAT.**
+  `gh auth token` (prefix `gho_`, scopes listed as `repo` plus
+  helpers) was stored as `MYTOKEN` in the Dependabot namespace. The
+  first workflow run will be the live smoke test on the rebased maven
+  PRs; because none of the existing PRs touch `.github/workflows/*.yml`,
+  the harder workflow-permission path will be tested by the next
+  github-actions burst.
+- **Adding `github-actions` ecosystem to a previously maven-only config
+  is expected to produce a burst of PRs on the next cycle.** The repo
+  had no github-actions entry before; the new config will trigger N
+  action-bump PRs at once. The Step 1 policy table auto-merges major
+  github-actions bumps, so the burst should drain quickly, but the
+  pre-existing maven PRs may go `BEHIND` repeatedly and need the
+  `update-branch` API to drain efficiently.
+- Counts unchanged: still seventeen pitfalls, seventeen verification
+  checks.
+
 ---
 
 ## Snags to watch for
@@ -1771,6 +1808,8 @@ title-grep for semver detection.
 - **`prefix-development` + `include: "scope"` produces `build(deps-dev)(deps-dev): ...` for Maven.** Maven dependencies are reported as `dependency-type: direct:development` by dependabot, so `prefix-development` and `include: "scope"` both apply to the same package. Setting `prefix-development: "build(deps-dev)"` plus `include: "scope"` yields `build(deps-dev)(deps-dev):` — the development prefix and the development scope collide. For Maven projects, just use a single `prefix:` (e.g. `build(deps)`) and skip `prefix-development`; the per-PR title will be `build(deps)(deps): ...` at worst, which is the same pattern the existing snag above describes. Alternatively keep `prefix-development` but set it to the same value as `prefix` so the collision is invisible.
 
 - **Check name format is `<job-name> (<matrix-axes>)`, not `<workflow> / <job>`.** A common source of duplicate check names when two workflows (`build.yml` and `build_extra.yml`, say) both define a job called `build` with the same matrix. Renaming `name:` on the workflow does not help; the job ID has to differ. See Pitfall 12 for the full pattern and fix.
+
+- **For `include:` matrices, every key in the include entry becomes part of the check name.** If a job has `strategy: matrix: include:` with entries like `{os: linux, runner: ubuntu-24.04, platform: linux-x86_64}`, the check name will be `Build native libs (linux, ubuntu-24.04, linux-x86_64)` — all three keys appear, not just `os`. Always discover the real names from GraphQL; guessing from the matrix declaration will give wrong branch-protection contexts.
 
 - **Pre-existing `autoMergeRequest` from a previous workflow version persists.** When you tighten the auto-merge policy (e.g. add a `semver-major` exclusion for github-actions, switch from `target: minor` to a stricter rule, or replace a permissive wrapper with explicit steps), existing open dependabot PRs that the old workflow already armed with `autoMergeRequest` keep that flag. The new workflow runs on the next `synchronize` event but only adds or re-sets `autoMergeRequest`; it does not clear one set by the old version. If those PRs happen to pass CI (or already pass it), they will auto-merge under the *old* policy even after the new policy is in place. To unstick them: `close + reopen` the PR (Pitfall 14 pattern), or push any new commit to its branch so the new workflow re-evaluates and re-sets `autoMergeRequest` to whatever the new policy decides. There is no `gh pr merge --disable-auto` flag — clearing requires a PR-level event.
 
