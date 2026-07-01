@@ -99,6 +99,8 @@ Before changing anything, gather context. Do not skip these.
    ```
 
    **This must run *before* you push any dependabot.yml change**, or the first dependabot cycle after the push will drop every PR for the ecosystems whose labels were missing. See Pitfall 17.
+
+   **Prefer existing labels when they semantically match.** If the repo already has `github_actions` (underscore) but the recipe uses `github-actions` (hyphen), adapt the config to the existing label rather than creating a near-duplicate. The exact name only matters to Dependabot's label-matching; humans can filter either way.
 3. **Check the GitHub repo** (use `gh` CLI; the user must be authenticated):
    ```bash
    gh auth status
@@ -456,7 +458,7 @@ If you see zero `pull_request` rows among the last 20 runs, your CI is not runni
 
 **Symptom**: Auto-merge workflow logs `GraphQL: Pull request refusing to allow a GitHub App to create or update workflow '.github/workflows/<file>.yml' without 'workflows' permission (enablePullRequestAutoMerge)`. Exit code 1, the merge step fails. The Approve step usually succeeds first.
 
-**Cause**: GitHub restricts `GITHUB_TOKEN` on `pull_request` events from writing to `.github/workflows/**`. Any PR that bumps an action version (i.e. virtually all `dependabot/github_actions/*` PRs) hits this.
+**Cause**: GitHub restricts `GITHUB_TOKEN` on `pull_request` events from writing to `.github/workflows/**`. Any PR that bumps an action version (i.e. virtually all `dependabot/github_actions/*` PRs) can hit this. The restriction is most reliable when the PR branch lives in a fork; for Dependabot branches pushed to the same repository it sometimes succeeds, which can make the failure look intermittent. Use a PAT to avoid the ambiguity.
 
 **Fix**: Use a repo PAT with `repo` + `workflow` scope for the `gh pr review` and `gh pr merge` steps. `fetch-metadata` is read-only and can keep using `GITHUB_TOKEN`. Configure via `gh secret set MYTOKEN --repo <owner>/<repo> --app dependabot --body "$TOKEN"` (use whatever name you want; remember the case and the `--app dependabot` namespace).
 
